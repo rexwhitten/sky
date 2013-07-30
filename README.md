@@ -4,7 +4,7 @@
 
 The Sky database is used to store partially transient, temporal hashes.
 This might not seem useful at first but it is a powerful construct when storing and analyzing behavioral data such as clickstreams, logs, and sensor data.
-Hashes have a loose schema associated with them to determine whether each property is transient or permanent and the property's data type.
+Hashes have a loose core associated with them to determine whether each property is transient or permanent and the property's data type.
 
 For example, let's say you want to analyze the behavior of users on your web site and combine it with other data in your database.
 Each user would have a hash in Sky.
