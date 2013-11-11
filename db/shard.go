@@ -2,12 +2,8 @@ package db
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
-	"io"
-	"io/ioutil"
 	"os"
-	"sort"
 	"sync"
 	"time"
 
@@ -96,315 +92,105 @@ func (s *shard) cursor(tablespace string) (*mdb.Cursor, error) {
 }
 
 // InsertEvent adds a single event to the shard.
-func (s *shard) InsertEvent(tablespace string, id string, event *core.Event, replace bool) error {
+func (s *shard) InsertEvent(tablespace string, id string, event *core.Event) error {
 	s.Lock()
 	defer s.Unlock()
-	return s.insertEvent(tablespace, id, event, replace)
-}
 
-func (s *shard) insertEvent(tablespace string, id string, event *core.Event, replace bool) error {
-	return s.insertEvents(tablespace, id, []*core.Event{event}, replace)
-}
-
-// InsertEvents adds multiple events for a single object.
-func (s *shard) InsertEvents(tablespace string, id string, newEvents []*core.Event, replace bool) error {
-	s.Lock()
-	defer s.Unlock()
-	return s.insertEvents(tablespace, id, newEvents, replace)
-}
-
-func (s *shard) insertEvents(tablespace string, id string, newEvents []*core.Event, replace bool) error {
-	if len(newEvents) == 0 {
-		return nil
-	}
-
-	// Sort events in timestamp order.
-	sort.Sort(core.EventList(newEvents))
-
-	// Check the current state and perform an optimized append if possible.
-	state, data, err := s.getState(tablespace, id)
-	var appendOnly bool
-	if state == nil {
-		appendOnly = true
-	} else {
-		for _, newEvent := range newEvents {
-			if !state.Timestamp.Before(newEvent.Timestamp) {
-				appendOnly = false
-				break
-			}
-		}
-	}
-	if appendOnly {
-		return s.appendEvents(tablespace, id, newEvents, state, data)
-	}
-
-	// Retrieve the events and state for the object.
-	events, state, err := s.getEvents(tablespace, id)
-	if err != nil {
-		return err
-	}
-
-	// Append all the new events and sort.
-	for _, newEvent := range newEvents {
-		// Merge events with an existing timestamp.
-		merged := false
-		for index, event := range events {
-			if event.Timestamp.Equal(newEvent.Timestamp) {
-				if replace {
-					events[index] = newEvent
-				} else {
-					event.Merge(newEvent)
-				}
-				merged = true
-				break
-			}
-		}
-
-		// If no existing events exist then just append to the end.
-		if !merged {
-			events = append(events, newEvent)
-		}
-	}
-	sort.Sort(core.EventList(events))
-
-	// Deduplicate permanent state.
-	state = &core.Event{Data: map[int64]interface{}{}}
-	for _, event := range events {
-		state.Timestamp = event.Timestamp
-		event.DedupePermanent(state)
-		state.MergePermanent(event)
-	}
-
-	// Remove all empty events.
-	events = []*core.Event(core.EventList(events).NonEmptyEvents())
-
-	// Write events back to the database.
-	err = s.setEvents(tablespace, id, events, state)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// Writes a list of events for an object in table.
-func (s *shard) setEvents(tablespace string, id string, events []*core.Event, state *core.Event) error {
-	// Sort the events.
-	sort.Sort(core.EventList(events))
-
-	// Ensure state is correct before proceeding.
-	if len(events) > 0 {
-		if state != nil {
-			state.Timestamp = events[len(events)-1].Timestamp
-		} else {
-			return errors.New("shard: missing state")
-		}
-	} else {
-		state = nil
-	}
-
-	// Encode the events.
-	buffer := new(bytes.Buffer)
-	for _, event := range events {
-		err := event.EncodeRaw(buffer)
-		if err != nil {
-			return err
-		}
-	}
-
-	// Set the raw bytes.
-	return s.write(tablespace, id, buffer.Bytes(), state)
-}
-
-// Appends events for a given object in a table to a servlet. This should not
-// be called directly but only through PutEvent().
-func (s *shard) appendEvents(tablespace string, id string, events []*core.Event, state *core.Event, data []byte) error {
-	if state == nil {
-		state = &core.Event{Data: map[int64]interface{}{}}
-	}
-
-	// Encode the event data to the end of the buffer.
-	buffer := bytes.NewBuffer(data)
-	for _, event := range events {
-		state.Timestamp = event.Timestamp
-		event.DedupePermanent(state)
-		state.MergePermanent(event)
-
-		// Append new event.
-		if err := event.EncodeRaw(buffer); err != nil {
-			return err
-		}
-	}
-
-	// Write everything to the database.
-	return s.write(tablespace, id, buffer.Bytes(), state)
-}
-
-// Writes a list of events for an object in tablespace.
-func (s *shard) write(tablespace string, id string, data []byte, state *core.Event) error {
-	var err error
-
-	// Encode the state at the beginning.
-	buffer := new(bytes.Buffer)
-	var b []byte
-	if state != nil {
-		if b, err = state.MarshalRaw(); err != nil {
-			return err
-		}
-	} else {
-		b = []byte{}
-	}
-	var handle codec.MsgpackHandle
-	handle.RawToString = true
-	if err := codec.NewEncoder(buffer, &handle).Encode(b); err != nil {
-		return err
-	}
-
-	// Encode the rest of the data.
-	buffer.Write(data)
-
-	// Begin a transaction.
 	txn, dbi, err := s.txn(tablespace, false)
 	if err != nil {
 		return fmt.Errorf("lmdb txn begin error: %s", err)
 	}
 
-	if err = txn.Put(dbi, []byte(id), buffer.Bytes(), mdb.NODUPDATA); err != nil {
+	if err := s.insertEvent(txn, dbi, id, core.ShiftTimeBytes(event.Timestamp), event.Data); err != nil {
 		txn.Abort()
-		return fmt.Errorf("lmdb txn put error: %s", err)
+		return err
 	}
 
 	// Commit the transaction.
-	if err = txn.Commit(); err != nil {
-		txn.Abort()
+	if err := txn.Commit(); err != nil {
 		return fmt.Errorf("lmdb txn commit error: %s", err)
 	}
 
 	return nil
 }
 
-// Retrieves an event for a given object at a single point in time.
-func (s *shard) getEvent(tablespace string, id string, timestamp time.Time) (*core.Event, error) {
-	// Retrieve all events.
-	events, _, err := s.getEvents(tablespace, id)
-	if err != nil {
-		return nil, err
-	}
-
-	// Find an event at a given point in time.
-	for _, v := range events {
-		if v.Timestamp.Equal(timestamp) {
-			return v, nil
+func (s *shard) insertEvent(txn *mdb.Txn, dbi mdb.DBI, id string, timestamp []byte, data map[int64]interface{}) error {
+	// Get event at timestamp and merge if existing.
+	if old, err := s.getEvent(txn, dbi, id, timestamp); err != nil {
+		return err
+	} else if old != nil {
+		for k, v := range data {
+			old[k] = v
+		}
+		data = old
+		if err := s.deleteEvent(txn, dbi, id, timestamp); err != nil {
+			return err
 		}
 	}
 
-	return nil, nil
-}
-
-// Retrieves a list of events and the current state for a given object in a table.
-func (s *shard) getEvents(tablespace string, id string) ([]*core.Event, *core.Event, error) {
-	state, data, err := s.getState(tablespace, id)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	events := make([]*core.Event, 0)
-	if data != nil {
-		reader := bytes.NewReader(data)
-		for {
-			event := &core.Event{}
-			if err := event.DecodeRaw(reader); err == io.EOF {
-				break
-			} else if err != nil {
-				return nil, nil, err
-			}
-			events = append(events, event)
-		}
-	}
-
-	return events, state, nil
-}
-
-// Retrieves the state and the remaining serialized event stream for an object.
-func (s *shard) getState(tablespace string, id string) (*core.Event, []byte, error) {
-	// Begin a transaction.
-	txn, dbi, err := s.txn(tablespace, false)
-	if err != nil {
-		return nil, nil, fmt.Errorf("lmdb state error: %s", err)
-	}
-
-	// Retrieve byte array.
-	data, err := txn.Get(dbi, []byte(id))
-	if err != nil && err != mdb.NotFound {
-		txn.Abort()
-		return nil, nil, err
-	}
-
-	// Commit the transaction.
-	if err = txn.Commit(); err != nil {
-		txn.Abort()
-		return nil, nil, fmt.Errorf("shard get state commit error: %s", err)
-	}
-
-	// Decode the events into a slice.
-	if data != nil {
-		reader := bytes.NewReader(data)
-
-		// The first item should be the current state wrapped in a raw value.
-		var raw interface{}
-		var handle codec.MsgpackHandle
-		handle.RawToString = true
-		decoder := codec.NewDecoder(reader, &handle)
-		if err := decoder.Decode(&raw); err != nil && err != io.EOF {
-			return nil, nil, err
-		}
-		if b, ok := raw.(string); ok {
-			state := &core.Event{}
-			if err = state.DecodeRaw(bytes.NewReader([]byte(b))); err == nil {
-				eventData, _ := ioutil.ReadAll(reader)
-				return state, eventData, nil
-			} else if err != io.EOF {
-				return nil, nil, err
-			}
-		} else {
-			return nil, nil, fmt.Errorf("shard: invalid state: %v", raw)
-		}
-	}
-
-	return nil, []byte{}, nil
-}
-
-// deleteEvent removes a single event from the shard.
-func (s *shard) DeleteEvent(tablespace string, id string, timestamp time.Time) error {
-	s.Lock()
-	defer s.Unlock()
-
-	// Retrieve the events for the object and append.
-	tmp, _, err := s.getEvents(tablespace, id)
-	if err != nil {
+	// Encode timestamp.
+	var b bytes.Buffer
+	if _, err := b.Write(timestamp); err != nil {
 		return err
 	}
-	// Remove any event matching the timestamp.
-	state := &core.Event{Data: map[int64]interface{}{}}
-	events := make([]*core.Event, 0)
-	for _, v := range tmp {
-		if !v.Timestamp.Equal(timestamp) {
-			events = append(events, v)
-			state.MergePermanent(v)
-		}
+
+	// Encode data.
+	var handle codec.MsgpackHandle
+	handle.RawToString = true
+	if err := codec.NewEncoder(&b, &handle).Encode(data); err != nil {
+		return err
 	}
 
-	// Write events back to the database.
-	err = s.setEvents(tablespace, id, events, state)
-	if err != nil {
-		return err
+	// Insert event.
+	if err := txn.Put(dbi, []byte(id), b.Bytes(), 0); err != nil {
+		return fmt.Errorf("lmdb txn put error: %s", err)
 	}
 
 	return nil
 }
 
+// InsertEvents adds a multiple events for an object to the shard.
+func (s *shard) InsertEvents(tablespace string, id string, events []*core.Event) error {
+	return nil
+}
+
+// Retrieves an event for a given object at a single point in time.
+func (s *shard) GetEvent(tablespace string, id string, timestamp time.Time) (*core.Event, error) {
+	return nil, nil
+}
+
+func (s *shard) getEvent(txn *mdb.Txn, dbi mdb.DBI, id string, timestamp []byte) (map[int64]interface{}, error) {
+	// Get(set_key []byte, op uint) (key, val []byte, err error) {
+	return nil, nil
+}
+
+// Retrieves a list of events for a given object in a table.
+func (s *shard) GetEvents(tablespace string, id string) ([]*core.Event, error) {
+	return nil, nil
+}
+
+func (s *shard) getEvents(txn *mdb.Txn, dbi mdb.DBI, id string) ([]*core.Event, error) {
+	// TODO: Loop over events and deserialize.
+	return nil, nil
+}
+
+
+// DeleteEvent removes a single event from the shard.
+func (s *shard) DeleteEvent(tablespace string, id string, timestamp time.Time) error {
+	s.Lock()
+	defer s.Unlock()
+
+	// TODO
+
+	return nil
+}
+
+func (s *shard) deleteEvent(txn *mdb.Txn, dbi mdb.DBI, id string, timestamp []byte) error {
+	return nil
+}
+
 // Deletes all events for a given object in a table.
-func (s *shard) DeleteEvents(tablespace, id string) error {
+func (s *shard) DeleteObject(tablespace, id string) error {
 	s.Lock()
 	defer s.Unlock()
 
@@ -457,7 +243,7 @@ func (s *shard) drop(tablespace string) error {
 	return nil
 }
 
-func (s *shard) txn(name string, readOnly bool) (*mdb.Txn, mdb.DBI, error) {
+func (s *shard) txn(tablespace string, readOnly bool) (*mdb.Txn, mdb.DBI, error) {
 	var flags uint = 0
 	if readOnly {
 		flags = flags | mdb.RDONLY
@@ -466,15 +252,15 @@ func (s *shard) txn(name string, readOnly bool) (*mdb.Txn, mdb.DBI, error) {
 	// Setup cursor to iterate over table.
 	txn, err := s.env.BeginTxn(nil, flags)
 	if err != nil {
-		return nil, 0, fmt.Errorf("skyd.Servlet: Unable to start LMDB transaction: %s", err)
+		return nil, 0, fmt.Errorf("Unable to start LMDB transaction: %s", err)
 	}
 	var dbi mdb.DBI
 	if readOnly {
-		if dbi, err = txn.DBIOpen(&name, 0); err != nil && err != mdb.NotFound {
+		if dbi, err = txn.DBIOpen(&tablespace, 0); err != nil && err != mdb.NotFound {
 			return nil, 0, fmt.Errorf("Unable to open read-only LMDB DBI: %s", err)
 		}
 	} else {
-		if dbi, err = txn.DBIOpen(&name, mdb.CREATE); err != nil {
+		if dbi, err = txn.DBIOpen(&tablespace, mdb.CREATE); err != nil {
 			return nil, 0, fmt.Errorf("Unable to open writable LMDB DBI: %s", err)
 		}
 	}

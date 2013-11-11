@@ -13,8 +13,8 @@ import (
 
 func TestShardInsertEvent(t *testing.T) {
 	withShard(func(s *shard) {
-		s.InsertEvent("foo", "bar", testevent("2000-01-01T00:00:00Z", 1, "john"), false)
-		e, err := s.getEvent("foo", "bar", musttime("2000-01-01T00:00:00Z"))
+		s.InsertEvent("foo", "bar", testevent("2000-01-01T00:00:00Z", 1, "john"))
+		e, err := s.GetEvent("foo", "bar", musttime("2000-01-01T00:00:00Z"))
 		assert.Nil(t, err, "")
 		assert.Equal(t, e.Timestamp, musttime("2000-01-01T00:00:00Z"), "")
 		assert.Equal(t, e.Data[1], "john", "")
@@ -156,7 +156,7 @@ func benchmarkInsert(b *testing.B, e *core.Event, eventsPerObject int, fn func()
 				index = 0
 				objectId++
 			}
-			s.InsertEvent("tbl0", strconv.Itoa(objectId), e, false)
+			s.InsertEvent("tbl0", strconv.Itoa(objectId), e)
 			fn()
 			index++
 		}

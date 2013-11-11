@@ -2,7 +2,7 @@ package core
 
 import (
 	"bytes"
-	"fmt"
+	"encoding/binary"
 	"github.com/ugorji/go/codec"
 	"io"
 	"time"
@@ -50,13 +50,16 @@ func NewEvent(timestamp string, data map[int64]interface{}) *Event {
 //--------------------------------------
 
 // Encodes an event to MsgPack format.
-func (e *Event) EncodeRaw(writer io.Writer) error {
+func (e *Event) EncodeRaw(w io.Writer) error {
+	// Encode timestamp.
+	if err := binary.Write(w, binary.BigEndian, ShiftTime(e.Timestamp)); err != nil {
+		return err
+	}
+
+	// Encode data.
 	var handle codec.MsgpackHandle
 	handle.RawToString = true
-	raw := []interface{}{ShiftTime(e.Timestamp), e.Data}
-	encoder := codec.NewEncoder(writer, &handle)
-	err := encoder.Encode(raw)
-	return err
+	return codec.NewEncoder(w, &handle).Encode(e.Data)
 }
 
 // Encodes an event to MsgPack format and returns the byte array.
@@ -69,44 +72,24 @@ func (e *Event) MarshalRaw() ([]byte, error) {
 }
 
 // Decodes an event from MsgPack format.
-func (e *Event) DecodeRaw(reader io.Reader) error {
-	var handle codec.MsgpackHandle
-	handle.RawToString = true
-	raw := make([]interface{}, 2)
-	err := codec.NewDecoder(reader, &handle).Decode(&raw)
-	if err != nil {
+func (e *Event) DecodeRaw(r io.Reader) error {
+	var timestamp int64
+	if err := binary.Read(r, binary.BigEndian, &timestamp); err != nil {
 		return err
 	}
+	e.Timestamp = UnshiftTime(timestamp).UTC()
 
-	// Convert the timestamp to int64.
-	if timestamp, ok := normalize(raw[0]).(int64); ok {
-		e.Timestamp = UnshiftTime(timestamp).UTC()
-	} else {
-		return fmt.Errorf("Unable to parse timestamp: '%v'", raw[0])
+	var handle codec.MsgpackHandle
+	handle.RawToString = true
+	e.Data = make(map[int64]interface{})
+	if err := codec.NewDecoder(r, &handle).Decode(&e.Data); err != nil {
+		return err
 	}
-
-	// Convert data to appropriate map.
-	if raw[1] != nil {
-		e.Data, err = e.decodeRawMap(raw[1].(map[interface{}]interface{}))
-		if err != nil {
-			return err
-		}
+	for k, v := range e.Data {
+		e.Data[k] = normalize(v)
 	}
 
 	return nil
-}
-
-// Decodes the map.
-func (e *Event) decodeRawMap(raw map[interface{}]interface{}) (map[int64]interface{}, error) {
-	m := make(map[int64]interface{})
-	for k, v := range raw {
-		if ki, ok := normalize(k).(int64); ok {
-			m[ki] = normalize(v)
-		} else {
-			return nil, fmt.Errorf("Invalid property key: %v", k)
-		}
-	}
-	return m, nil
 }
 
 func (e *Event) UnmarshalRaw(data []byte) error {
@@ -135,34 +118,13 @@ func (e *Event) Equal(x *Event) bool {
 	return true
 }
 
-//--------------------------------------
-// Merging / Deduplication
-//--------------------------------------
-
 // Merges the data of another event into this event.
-func (e *Event) Merge(a *Event) {
+func (e *Event) Merge(a *Event) *Event {
 	if e.Data == nil && a.Data != nil {
 		e.Data = make(map[int64]interface{})
 	}
 	for k, v := range a.Data {
 		e.Data[k] = v
 	}
-}
-
-// Merges the persistent data of another event into this event.
-func (e *Event) MergePermanent(a *Event) {
-	for k, v := range a.Data {
-		if k > 0 {
-			e.Data[k] = v
-		}
-	}
-}
-
-// Removes permanent data in the event that is present in another event.
-func (e *Event) DedupePermanent(a *Event) {
-	for k, v := range a.Data {
-		if normalize(e.Data[k]) == normalize(v) {
-			delete(e.Data, k)
-		}
-	}
+	return e
 }
