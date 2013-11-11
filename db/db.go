@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/skydb/sky/core"
-	"github.com/szferi/gomdb"
 )
 
 var defaultShardCount = runtime.NumCPU()
@@ -80,13 +79,6 @@ func (db *db) Open() error {
 		return err
 	}
 
-	// Create LMDB flagset.
-	options := uint(0)
-	options |= mdb.NOTLS
-	if db.noSync {
-		options |= mdb.NOSYNC
-	}
-
 	// Determine shard count.
 	shardCount, err := db.shardCount()
 	if err != nil {
@@ -97,7 +89,7 @@ func (db *db) Open() error {
 	db.shards = make([]*shard, 0)
 	for i := 0; i < shardCount; i++ {
 		db.shards = append(db.shards, newShard(db.shardPath(i)))
-		if err := db.shards[i].Open(db.maxDBs, db.maxReaders, options); err != nil {
+		if err := db.shards[i].Open(db.maxDBs, db.maxReaders, options(db.noSync)); err != nil {
 			db.close()
 			return err
 		}
