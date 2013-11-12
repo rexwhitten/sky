@@ -21,6 +21,20 @@ func TestShardInsertEvent(t *testing.T) {
 	})
 }
 
+func TestShardMergeEvent(t *testing.T) {
+	withShard(func(s *shard) {
+		s.InsertEvent("tbl0", "obj0", testevent("2000-01-01T00:00:00Z", 1, "aaa", 2, 100))
+		s.InsertEvent("tbl0", "obj0", testevent("2000-01-03T00:00:00Z", 1, "bbb", 2, 200))
+		s.InsertEvent("tbl0", "obj0", testevent("2000-01-02T00:00:00Z", 1, "ccc", 2, 300))
+		s.InsertEvent("tbl0", "obj0", testevent("2000-01-02T00:00:00Z", 1, "ddd"))
+		e, err := s.GetEvent("tbl0", "obj0", musttime("2000-01-02T00:00:00Z"))
+		assert.Nil(t, err, "")
+		assert.Equal(t, e.Timestamp, musttime("2000-01-02T00:00:00Z"), "")
+		assert.Equal(t, e.Data[1], "ddd", "")
+		assert.Equal(t, e.Data[2], 300, "")
+	})
+}
+
 func TestShardGetMissingEventInExistingObject(t *testing.T) {
 	withShard(func(s *shard) {
 		s.InsertEvent("tbl0", "obj0", testevent("2000-01-01T00:00:00Z", 1, "john"))

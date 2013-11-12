@@ -136,8 +136,8 @@ func (s *shard) insertEvent(txn *mdb.Txn, dbi mdb.DBI, c *mdb.Cursor, id string,
 			old[k] = v
 		}
 		data = old
-		if err := s.deleteEvent(txn, dbi, id, timestamp); err != nil {
-			return err
+		if err := c.Del(0); err != nil {
+			return fmt.Errorf("lmdb cursor del error: %s", err)
 		}
 	}
 
