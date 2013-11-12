@@ -167,12 +167,9 @@ func (db *db) Factorizer() Factorizer {
 
 // Cursors retrieves a set of cursors for iterating over the database.
 func (db *db) Cursors(tablespace string) (Cursors, error) {
-	db.LockAll()
-	defer db.UnlockAll()
-
 	cursors := make(Cursors, 0)
 	for _, s := range db.shards {
-		c, err := s.cursor(tablespace)
+		c, err := s.Cursor(tablespace)
 		if err != nil {
 			cursors.Close()
 			return nil, fmt.Errorf("db cursors error: %s", err)

@@ -13,11 +13,29 @@ import (
 
 func TestShardInsertEvent(t *testing.T) {
 	withShard(func(s *shard) {
-		s.InsertEvent("foo", "bar", testevent("2000-01-01T00:00:00Z", 1, "john"))
-		e, err := s.GetEvent("foo", "bar", musttime("2000-01-01T00:00:00Z"))
+		s.InsertEvent("tbl0", "obj0", testevent("2000-01-01T00:00:00Z", 1, "john"))
+		e, err := s.GetEvent("tbl0", "obj0", musttime("2000-01-01T00:00:00Z"))
 		assert.Nil(t, err, "")
 		assert.Equal(t, e.Timestamp, musttime("2000-01-01T00:00:00Z"), "")
 		assert.Equal(t, e.Data[1], "john", "")
+	})
+}
+
+func TestShardGetMissingEventInExistingObject(t *testing.T) {
+	withShard(func(s *shard) {
+		s.InsertEvent("tbl0", "obj0", testevent("2000-01-01T00:00:00Z", 1, "john"))
+		e, err := s.GetEvent("tbl0", "obj0", musttime("1990-01-01T00:00:00Z"))
+		assert.Nil(t, e, "")
+		assert.Nil(t, err, "")
+	})
+}
+
+func TestShardGetMissingEventInMissingObject(t *testing.T) {
+	withShard(func(s *shard) {
+		s.InsertEvent("tbl0", "obj0", testevent("2000-01-01T00:00:00Z", 1, "john"))
+		e, err := s.GetEvent("tbl0", "wrong_obj", musttime("2000-01-01T00:00:00Z"))
+		assert.Nil(t, e, "")
+		assert.Nil(t, err, "")
 	})
 }
 

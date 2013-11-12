@@ -75,19 +75,25 @@ func (s *shard) close() {
 	}
 }
 
-// cursor retrieves a cursor for iterating over the shard.
-func (s *shard) cursor(tablespace string) (*mdb.Cursor, error) {
+// Cursor retrieves a cursor for iterating over the shard.
+func (s *shard) Cursor(tablespace string) (*mdb.Cursor, error) {
+	s.RLock()
+	defer s.RUnlock()
+
 	txn, dbi, err := s.txn(tablespace, true)
 	if err != nil {
 		return nil, fmt.Errorf("shard cursor error: %s", err)
 	}
 
+	return s.cursor(txn, dbi)
+}
+
+// cursor retrieves a cursor for iterating over the shard.
+func (s *shard) cursor(txn *mdb.Txn, dbi mdb.DBI) (*mdb.Cursor, error) {
 	c, err := txn.CursorOpen(dbi)
 	if err != nil {
-		txn.Abort()
 		return nil, fmt.Errorf("lmdb cursor open error: %s", err)
 	}
-
 	return c, nil
 }
 
@@ -101,10 +107,17 @@ func (s *shard) InsertEvent(tablespace string, id string, event *core.Event) err
 		return fmt.Errorf("lmdb txn begin error: %s", err)
 	}
 
-	if err := s.insertEvent(txn, dbi, id, core.ShiftTimeBytes(event.Timestamp), event.Data); err != nil {
+	c, err := s.cursor(txn, dbi)
+	if err != nil {
+		return fmt.Errorf("lmdb cursor error: %s", err)
+	}
+
+	if err := s.insertEvent(txn, dbi, c, id, core.ShiftTimeBytes(event.Timestamp), event.Data); err != nil {
+		c.Close()
 		txn.Abort()
 		return err
 	}
+	c.Close()
 
 	// Commit the transaction.
 	if err := txn.Commit(); err != nil {
@@ -114,9 +127,9 @@ func (s *shard) InsertEvent(tablespace string, id string, event *core.Event) err
 	return nil
 }
 
-func (s *shard) insertEvent(txn *mdb.Txn, dbi mdb.DBI, id string, timestamp []byte, data map[int64]interface{}) error {
+func (s *shard) insertEvent(txn *mdb.Txn, dbi mdb.DBI, c *mdb.Cursor, id string, timestamp []byte, data map[int64]interface{}) error {
 	// Get event at timestamp and merge if existing.
-	if old, err := s.getEvent(txn, dbi, id, timestamp); err != nil {
+	if old, err := s.getEvent(c, id, timestamp); err != nil {
 		return err
 	} else if old != nil {
 		for k, v := range data {
@@ -156,12 +169,72 @@ func (s *shard) InsertEvents(tablespace string, id string, events []*core.Event)
 
 // Retrieves an event for a given object at a single point in time.
 func (s *shard) GetEvent(tablespace string, id string, timestamp time.Time) (*core.Event, error) {
-	return nil, nil
+	s.Lock()
+	defer s.Unlock()
+
+	txn, dbi, err := s.txn(tablespace, true)
+	if err != nil {
+		return nil, fmt.Errorf("lmdb txn begin error: %s", err)
+	}
+
+	c, err := s.cursor(txn, dbi)
+	if err != nil {
+		return nil, fmt.Errorf("lmdb cursor error: %s", err)
+	}
+
+	data, err := s.getEvent(c, id, core.ShiftTimeBytes(timestamp))
+	if err != nil {
+		c.Close()
+		txn.Abort()
+		return nil, err
+	}
+	c.Close()
+
+	if data == nil {
+		return nil, nil
+	}
+
+	if err := txn.Commit(); err != nil {
+		return nil, fmt.Errorf("lmdb txn commit error: %s", err)
+	}
+
+	return &core.Event{Timestamp: timestamp, Data: data}, nil
 }
 
-func (s *shard) getEvent(txn *mdb.Txn, dbi mdb.DBI, id string, timestamp []byte) (map[int64]interface{}, error) {
-	// Get(set_key []byte, op uint) (key, val []byte, err error) {
-	return nil, nil
+func (s *shard) getEvent(c *mdb.Cursor, id string, timestamp []byte) (map[int64]interface{}, error) {
+	// Position cursor at possible event.
+	_, _, err := mdbGet2(c, []byte(id), timestamp, mdb.GET_RANGE)
+	if err == mdb.NotFound {
+		return nil, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("lmdb cursor get error: %s", err)
+	}
+
+	// Retrieve current cursor value.
+	_, val, err := c.Get(nil, mdb.GET_CURRENT)
+	if err == mdb.NotFound {
+		return nil, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("lmdb cursor get current error: %s", err)
+	}
+
+	// Check if timestamp is equal.
+	if !bytes.Equal(timestamp, val[0:8]) {
+		return nil, nil
+	}
+
+	// Decode data.
+	var data = make(map[int64]interface{})
+	var handle codec.MsgpackHandle
+	handle.RawToString = true
+	if err := codec.NewDecoder(bytes.NewBuffer(val[8:]), &handle).Decode(&data); err != nil {
+		return nil, err
+	}
+	for k, v := range data {
+		data[k] = normalize(v)
+	}
+
+	return data, nil
 }
 
 // Retrieves a list of events for a given object in a table.
@@ -256,11 +329,11 @@ func (s *shard) txn(tablespace string, readOnly bool) (*mdb.Txn, mdb.DBI, error)
 	}
 	var dbi mdb.DBI
 	if readOnly {
-		if dbi, err = txn.DBIOpen(&tablespace, 0); err != nil && err != mdb.NotFound {
+		if dbi, err = txn.DBIOpen(&tablespace, mdb.DUPSORT); err != nil && err != mdb.NotFound {
 			return nil, 0, fmt.Errorf("Unable to open read-only LMDB DBI: %s", err)
 		}
 	} else {
-		if dbi, err = txn.DBIOpen(&tablespace, mdb.CREATE); err != nil {
+		if dbi, err = txn.DBIOpen(&tablespace, mdb.CREATE|mdb.DUPSORT); err != nil {
 			return nil, 0, fmt.Errorf("Unable to open writable LMDB DBI: %s", err)
 		}
 	}
