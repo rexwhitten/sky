@@ -24,7 +24,7 @@ func TestServerMergeObject(t *testing.T) {
 		assertResponse(t, resp, 200, "", "Merge failed")
 
 		// Verify combined timeline.
-		exp := `[{"data":{"name":"john"},"timestamp":"2012-01-01T00:00:00Z"},{"data":{"name":"susy"},"timestamp":"2012-01-03T00:00:00Z"},{"data":{"num":10},"timestamp":"2012-01-04T00:00:00Z"},{"data":{"num":20},"timestamp":"2012-01-06T00:00:00Z"},{"data":{"num":30},"timestamp":"2012-01-07T00:00:00Z"}]` + "\n"
+		exp := `[{"data":{"name":"john"},"timestamp":"2012-01-01T00:00:00Z"},{"data":{"name":"john"},"timestamp":"2012-01-02T00:00:00Z"},{"data":{"name":"susy"},"timestamp":"2012-01-03T00:00:00Z"},{"data":{"num":10},"timestamp":"2012-01-04T00:00:00Z"},{"data":{"name":"susy","num":20},"timestamp":"2012-01-06T00:00:00Z"},{"data":{"num":30},"timestamp":"2012-01-07T00:00:00Z"}]` + "\n"
 		resp, _ = sendTestHttpRequest("GET", "http://localhost:8586/tables/foo/objects/a/events", "application/json", "")
 		assertResponse(t, resp, 200, exp, "GET /tables/foo/objects/a/events failed.")
 

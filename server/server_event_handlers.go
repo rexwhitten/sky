@@ -44,7 +44,7 @@ func (s *Server) getEventsHandler(w http.ResponseWriter, req *http.Request, para
 	}
 
 	// Retrieve raw events.
-	events, _, err := s.db.GetEvents(t.Name, vars["objectId"])
+	events, err := s.db.GetEvents(t.Name, vars["objectId"])
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +72,7 @@ func (s *Server) deleteEventsHandler(w http.ResponseWriter, req *http.Request, p
 	if err != nil {
 		return nil, err
 	}
-	return nil, s.db.DeleteEvents(t.Name, vars["objectId"])
+	return nil, s.db.DeleteObject(t.Name, vars["objectId"])
 }
 
 // GET /tables/:name/objects/:objectId/events/:timestamp
@@ -128,7 +128,7 @@ func (s *Server) replaceEventHandler(w http.ResponseWriter, req *http.Request, p
 		return nil, err
 	}
 
-	return nil, s.db.InsertEvent(t.Name, vars["objectId"], event, true)
+	return nil, s.db.InsertEvent(t.Name, vars["objectId"], event)
 }
 
 // PATCH /tables/:name/objects/:objectId/events/:timestamp
@@ -148,7 +148,7 @@ func (s *Server) updateEventHandler(w http.ResponseWriter, req *http.Request, pa
 	if err != nil {
 		return nil, err
 	}
-	return nil, s.db.InsertEvent(t.Name, vars["objectId"], event, false)
+	return nil, s.db.InsertEvent(t.Name, vars["objectId"], event)
 }
 
 // PATCH /tables/:name/events
@@ -200,7 +200,7 @@ func (s *Server) streamUpdateEventsHandler(w http.ResponseWriter, req *http.Requ
 
 	if err == nil {
 		err = func() error {
-			count, err := s.db.InsertObjects(table.Name, objects, false)
+			count, err := s.db.InsertObjects(table.Name, objects)
 			if err != nil {
 				return fmt.Errorf("Cannot put event: %v", err)
 			}
