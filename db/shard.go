@@ -164,6 +164,33 @@ func (s *shard) insertEvent(txn *mdb.Txn, dbi mdb.DBI, c *mdb.Cursor, id string,
 
 // InsertEvents adds a multiple events for an object to the shard.
 func (s *shard) InsertEvents(tablespace string, id string, events []*core.Event) error {
+	s.Lock()
+	defer s.Unlock()
+
+	txn, dbi, err := s.txn(tablespace, false)
+	if err != nil {
+		return fmt.Errorf("lmdb txn begin error: %s", err)
+	}
+
+	c, err := s.cursor(txn, dbi)
+	if err != nil {
+		return fmt.Errorf("lmdb cursor error: %s", err)
+	}
+
+	for _, event := range events {
+		if err := s.insertEvent(txn, dbi, c, id, core.ShiftTimeBytes(event.Timestamp), event.Data); err != nil {
+			c.Close()
+			txn.Abort()
+			return err
+		}
+	}
+	c.Close()
+
+	// Commit the transaction.
+	if err := txn.Commit(); err != nil {
+		return fmt.Errorf("lmdb txn commit error: %s", err)
+	}
+
 	return nil
 }
 
