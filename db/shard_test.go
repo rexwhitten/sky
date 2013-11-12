@@ -1,6 +1,8 @@
 package db
 
 import (
+	"fmt"
+	"time"
 	"io/ioutil"
 	"os"
 	"testing"
@@ -49,6 +51,24 @@ func TestShardGetMissingEventInMissingObject(t *testing.T) {
 		assert.Nil(t, err, "")
 	})
 }
+
+func TestShardGetEvents(t *testing.T) {
+	withShard(func(s *shard) {
+		s.InsertEvent("tbl0", "obj0", testevent("2000-01-02T00:00:00Z", 1, "xxx"))
+		s.InsertEvent("tbl0", "obj0", testevent("2000-01-01T00:00:00Z", 1, "yyy"))
+		s.InsertEvent("tbl0", "obj0", testevent("2000-01-03T00:00:00Z", 1, "zzz"))
+		events, err := s.GetEvents("tbl0", "obj0")
+		assert.Nil(t, err, "")
+		assert.Equal(t, len(events), 3)
+		assert.Equal(t, events[0].Timestamp.UTC(), musttime("2000-01-01T00:00:00Z"))
+		assert.Equal(t, events[0].Data[1], "yyy")
+		assert.Equal(t, events[1].Timestamp.UTC(), musttime("2000-01-02T00:00:00Z"))
+		assert.Equal(t, events[1].Data[1], "xxx")
+		assert.Equal(t, events[2].Timestamp.UTC(), musttime("2000-01-03T00:00:00Z"))
+		assert.Equal(t, events[2].Data[1], "zzz")
+	})
+}
+
 
 func withShard(f func(*shard)) {
 	path, _ := ioutil.TempDir("", "")

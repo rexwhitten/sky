@@ -28,3 +28,9 @@ func UnshiftTime(value int64) time.Time {
 	sec := value >> 20
 	return time.Unix(sec, usec*1000)
 }
+
+// UnshiftTimeBytes converts a byte slice in Sky timestamp format to Go time.
+func UnshiftTimeBytes(value []byte) time.Time {
+	timestamp := binary.BigEndian.Uint64(value)
+	return UnshiftTime(int64(timestamp))
+}

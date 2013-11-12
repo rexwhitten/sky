@@ -266,14 +266,77 @@ func (s *shard) getEvent(c *mdb.Cursor, id string, timestamp []byte) (map[int64]
 
 // Retrieves a list of events for a given object in a table.
 func (s *shard) GetEvents(tablespace string, id string) ([]*core.Event, error) {
-	return nil, nil
-}
+	s.Lock()
+	defer s.Unlock()
 
-func (s *shard) getEvents(txn *mdb.Txn, dbi mdb.DBI, id string) ([]*core.Event, error) {
-	// TODO: Loop over events and deserialize.
-	return nil, nil
-}
+	var events = make([]*core.Event, 0)
 
+	txn, dbi, err := s.txn(tablespace, true)
+	if err != nil {
+		return nil, fmt.Errorf("lmdb txn begin error: %s", err)
+	}
+
+	c, err := s.cursor(txn, dbi)
+	if err != nil {
+		return nil, fmt.Errorf("lmdb cursor error: %s", err)
+	}
+
+	// Initialize cursor.
+	if _, _, err := c.Get([]byte(id), mdb.FIRST); err == mdb.NotFound {
+		return events, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("lmdb cursor set first error: %s", err)
+	}
+
+	// Initialize cursor position.
+	if _, _, err := c.Get([]byte(id), mdb.FIRST_DUP); err == mdb.NotFound {
+		return events, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("lmdb cursor set first dup error: %s", err)
+	}
+
+	for {
+		_, val, err := c.Get([]byte(id), mdb.GET_CURRENT)
+		if err != nil {
+			c.Close()
+			return nil, fmt.Errorf("lmdb cursor current error: %s", err)
+		}
+
+		// Create event.
+		event := &core.Event{
+			Timestamp: core.UnshiftTimeBytes(val[0:8]),
+			Data: make(map[int64]interface{}),
+		}
+		
+		// Decode data.
+		var handle codec.MsgpackHandle
+		handle.RawToString = true
+		if err := codec.NewDecoder(bytes.NewBuffer(val[8:]), &handle).Decode(&event.Data); err != nil {
+			c.Close()
+			return nil, err
+		}
+		for k, v := range event.Data {
+			event.Data[k] = normalize(v)
+		}
+
+		events = append(events, event)
+
+		// Move cursor forward.
+		if _, _, err := c.Get([]byte(id), mdb.NEXT_DUP); err == mdb.NotFound {
+			break
+		} else if err != nil {
+			c.Close()
+			return nil, fmt.Errorf("lmdb cursor next dup error: %s", err)
+		}
+	}
+	c.Close()
+
+	if err := txn.Commit(); err != nil {
+		return nil, fmt.Errorf("lmdb txn commit error: %s", err)
+	}
+
+	return events, nil
+}
 
 // DeleteEvent removes a single event from the shard.
 func (s *shard) DeleteEvent(tablespace string, id string, timestamp time.Time) error {
