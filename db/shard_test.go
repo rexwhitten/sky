@@ -8,6 +8,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestShardGetEventFromEmptyEnv(t *testing.T) {
+	withShard(func(s *shard) {
+		e, err := s.GetEvent("tbl0", "obj0", musttime("2000-01-01T00:00:00Z"))
+		assert.Nil(t, e, "")
+		assert.Nil(t, err, "")
+	})
+}
+
 func TestShardInsertEvent(t *testing.T) {
 	withShard(func(s *shard) {
 		s.InsertEvent("tbl0", "obj0", testevent("2000-01-01T00:00:00Z", 1, "john"))
@@ -58,11 +66,11 @@ func TestShardGetEvents(t *testing.T) {
 		events, err := s.GetEvents("tbl0", "obj0")
 		assert.Nil(t, err, "")
 		assert.Equal(t, len(events), 3)
-		assert.Equal(t, events[0].Timestamp.UTC(), musttime("2000-01-01T00:00:00Z"))
+		assert.Equal(t, events[0].Timestamp, musttime("2000-01-01T00:00:00Z"))
 		assert.Equal(t, events[0].Data[1], "yyy")
-		assert.Equal(t, events[1].Timestamp.UTC(), musttime("2000-01-02T00:00:00Z"))
+		assert.Equal(t, events[1].Timestamp, musttime("2000-01-02T00:00:00Z"))
 		assert.Equal(t, events[1].Data[1], "xxx")
-		assert.Equal(t, events[2].Timestamp.UTC(), musttime("2000-01-03T00:00:00Z"))
+		assert.Equal(t, events[2].Timestamp, musttime("2000-01-03T00:00:00Z"))
 		assert.Equal(t, events[2].Data[1], "zzz")
 	})
 }

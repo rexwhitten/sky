@@ -234,6 +234,9 @@ func (s *shard) getEvent(c *mdb.Cursor, id string, timestamp []byte) (map[int64]
 	_, _, err := mdbGet2(c, []byte(id), timestamp, mdb.GET_RANGE)
 	if err == mdb.NotFound {
 		return nil, nil
+	} else if err == mdb.Incompatibile {
+		// This only occurs when a db is read before it is created.
+		return nil, nil
 	} else if err != nil {
 		return nil, fmt.Errorf("lmdb cursor get error: %s", err)
 	}
@@ -283,17 +286,10 @@ func (s *shard) GetEvents(tablespace string, id string) ([]*core.Event, error) {
 	}
 
 	// Initialize cursor.
-	if _, _, err := c.Get([]byte(id), mdb.FIRST); err == mdb.NotFound {
+	if _, _, err := mdbGet2(c, []byte(id), []byte{0}, mdb.GET_RANGE); err == mdb.NotFound {
 		return events, nil
 	} else if err != nil {
-		return nil, fmt.Errorf("lmdb cursor set first error: %s", err)
-	}
-
-	// Initialize cursor position.
-	if _, _, err := c.Get([]byte(id), mdb.FIRST_DUP); err == mdb.NotFound {
-		return events, nil
-	} else if err != nil {
-		return nil, fmt.Errorf("lmdb cursor set first dup error: %s", err)
+		return nil, fmt.Errorf("lmdb cursor init error: %s", err)
 	}
 
 	for {

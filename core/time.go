@@ -26,7 +26,7 @@ func ShiftTimeBytes(value time.Time) []byte {
 func UnshiftTime(value int64) time.Time {
 	usec := value & 0xFFFFF
 	sec := value >> 20
-	return time.Unix(sec, usec*1000)
+	return time.Unix(sec, usec*1000).UTC()
 }
 
 // UnshiftTimeBytes converts a byte slice in Sky timestamp format to Go time.
