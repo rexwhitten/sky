@@ -1,8 +1,6 @@
 package db
 
 import (
-	"fmt"
-	"time"
 	"io/ioutil"
 	"os"
 	"testing"
@@ -69,6 +67,23 @@ func TestShardGetEvents(t *testing.T) {
 	})
 }
 
+func TestShardDeleteEvent(t *testing.T) {
+	withShard(func(s *shard) {
+		s.InsertEvent("tbl0", "obj0", testevent("2000-01-01T00:00:00Z", 1, "xxx"))
+		s.InsertEvent("tbl0", "obj0", testevent("2000-01-02T00:00:00Z", 1, "yyy"))
+		s.InsertEvent("tbl0", "obj0", testevent("2000-01-03T00:00:00Z", 1, "zzz"))
+		err := s.DeleteEvent("tbl0", "obj0", musttime("2000-01-02T00:00:00Z"))
+		assert.Nil(t, err, "")
+		e, err := s.GetEvent("tbl0", "obj0", musttime("2000-01-02T00:00:00Z"))
+		assert.Nil(t, e, "")
+		assert.Nil(t, err, "")
+		s.DeleteEvent("tbl0", "obj0", musttime("2000-01-01T00:00:00Z"))
+		s.DeleteEvent("tbl0", "obj0", musttime("2000-01-03T00:00:00Z"))
+		events, err := s.GetEvents("tbl0", "obj0")
+		assert.Nil(t, err, "")
+		assert.Equal(t, len(events), 0, "")
+	})
+}
 
 func withShard(f func(*shard)) {
 	path, _ := ioutil.TempDir("", "")

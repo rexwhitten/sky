@@ -109,6 +109,7 @@ func (s *shard) InsertEvent(tablespace string, id string, event *core.Event) err
 
 	c, err := s.cursor(txn, dbi)
 	if err != nil {
+		txn.Abort()
 		return fmt.Errorf("lmdb cursor error: %s", err)
 	}
 
@@ -343,12 +344,36 @@ func (s *shard) DeleteEvent(tablespace string, id string, timestamp time.Time) e
 	s.Lock()
 	defer s.Unlock()
 
-	// TODO
+	txn, dbi, err := s.txn(tablespace, false)
+	if err != nil {
+		return fmt.Errorf("lmdb txn begin error: %s", err)
+	}
 
-	return nil
-}
+	c, err := s.cursor(txn, dbi)
+	if err != nil {
+		txn.Abort()
+		return fmt.Errorf("lmdb cursor error: %s", err)
+	}
 
-func (s *shard) deleteEvent(txn *mdb.Txn, dbi mdb.DBI, id string, timestamp []byte) error {
+	// Check if event exists and move the cursor.
+	if old, err := s.getEvent(c, id, core.ShiftTimeBytes(timestamp)); err != nil {
+		c.Close()
+		txn.Abort()
+		return err
+	} else if old != nil {
+		if err := c.Del(0); err != nil {
+			c.Close()
+			txn.Abort()
+			return fmt.Errorf("lmdb cursor del error: %s", err)
+		}
+	}
+	c.Close()
+
+	// Commit the transaction.
+	if err := txn.Commit(); err != nil {
+		return fmt.Errorf("lmdb txn commit error: %s", err)
+	}
+
 	return nil
 }
 
