@@ -21,9 +21,6 @@ int mp_unpack(lua_State *L);
 //
 //==============================================================================
 
-#define sky_event_flag_t uint8_t
-#define EVENT_FLAG       0x92
-
 // The number of microseconds per second.
 #define USEC_PER_SEC        1000000
 
@@ -67,7 +64,7 @@ int mp_unpack(lua_State *L);
 
 #define badcursordata(MSG, PTR) do {\
     fprintf(stderr, "Cursor pointing at invalid raw event data [" MSG "]: %p->%p\n", cursor->ptr, PTR); \
-    cursor->sys_eof = cursor->eof = true; \
+    cursor->eof = true; \
     return; \
 } while(0)
 
@@ -103,17 +100,15 @@ typedef struct {
 
 struct sky_cursor {
     void *data;
+    void *next;
+
     uint32_t next_timestamp;
     uint32_t max_timestamp;
-    int32_t session_event_index;
     uint32_t session_idle_in_sec;
 
     uint32_t data_sz;
     uint32_t action_data_sz;
 
-    void *startptr;
-    void *nextptr;
-    void *endptr;
     void *ptr;
     bool eof;
     bool eos;
@@ -173,11 +168,7 @@ void sky_clear_boolean(void *target);
 
 bool sky_cursor_next_object(sky_cursor *cursor);
 
-//--------------------------------------
-// Event Iteration
-//--------------------------------------
-
-void sky_cursor_set_ptr(sky_cursor *cursor, void *ptr, size_t sz);
+void sky_cursor_read(sky_cursor *cursor, void *data, void *ptr);
 
 //--------------------------------------
 // Timestamps
@@ -208,6 +199,37 @@ uint32_t minipack_unpack_raw(void *ptr, size_t *sz);
 uint32_t minipack_unpack_map(void *ptr, size_t *sz);
 
 void minipack_unpack_nil(void *ptr, size_t *sz);
+
+
+//==============================================================================
+//
+// Byte Order
+//
+//==============================================================================
+
+#include <sys/types.h>
+
+#ifndef BYTE_ORDER
+#if defined(linux) || defined(__linux__)
+# include <endian.h>
+#else
+# include <machine/endian.h>
+#endif
+#endif
+
+#if !defined(BYTE_ORDER) && !defined(__BYTE_ORDER)
+#error "Undefined byte order"
+#endif
+
+uint64_t bswap64(uint64_t value);
+
+#if (BYTE_ORDER == LITTLE_ENDIAN) || (__BYTE_ORDER == __LITTLE_ENDIAN)
+#define htonll(x) bswap64(x)
+#define ntohll(x) bswap64(x)
+#else
+#define htonll(x) x
+#define ntohll(x) x
+#endif
 
 
 //==============================================================================
@@ -265,6 +287,8 @@ void sky_cursor_free(sky_cursor *cursor)
 
         if(cursor->data != NULL) free(cursor->data);
         cursor->data = NULL;
+        if(cursor->next != NULL) free(cursor->next);
+        cursor->next = NULL;
         if(cursor->key_prefix != NULL) free(cursor->key_prefix);
         cursor->key_prefix = NULL;
 
@@ -295,9 +319,14 @@ void sky_cursor_set_value(sky_cursor *cursor, void *target,
 
 void sky_cursor_set_data_sz(sky_cursor *cursor, uint32_t sz) {
     cursor->data_sz = sz;
+
     if(cursor->data != NULL) free(cursor->data);
     cursor->data = calloc(1, sz);
     if(cursor->data == NULL) debug("[malloc] Unable to allocate cursor data.");
+
+    if(cursor->next != NULL) free(cursor->next);
+    cursor->next = calloc(1, sz);
+    if(cursor->next == NULL) debug("[malloc] Unable to allocate cursor next.");
 }
 
 void sky_cursor_set_timestamp_offset(sky_cursor *cursor, uint32_t offset) {
@@ -355,182 +384,103 @@ void sky_cursor_set_property(sky_cursor *cursor, int64_t property_id,
 // Moves the cursor to point to the next object.
 bool sky_cursor_next_object(sky_cursor *cursor)
 {
+    printf("next.object.1\n");
+
     // Move to next object.
     MDB_val key, data;
-    if(cursor->lmdb_cursor != NULL && mdb_cursor_get(cursor->lmdb_cursor, &key, &data, MDB_NEXT) == 0) {
-        // Don't move to the next object if the prefix doesn't match.
-        if(cursor->key_prefix != NULL && (key.mv_size < cursor->key_prefix_sz || memcmp(cursor->key_prefix, key.mv_data, cursor->key_prefix_sz) != 0)) {
-            return false;
-        }
-
-        sky_cursor_set_ptr(cursor, data.mv_data, data.mv_size);
-        return true;
-    }
-    else {
+    if(cursor->lmdb_cursor == NULL || mdb_cursor_get(cursor->lmdb_cursor, &key, &data, MDB_NEXT) != 0) {
+        printf("next.object.2\n");
+        return false;
+    } else if(cursor->key_prefix != NULL && (key.mv_size < cursor->key_prefix_sz || memcmp(cursor->key_prefix, key.mv_data, cursor->key_prefix_sz) != 0)) {
+        printf("next.object.3\n");
         return false;
     }
-}
 
-
-//--------------------------------------
-// Event Iteration
-//--------------------------------------
-
-void sky_cursor_set_ptr(sky_cursor *cursor, void *ptr, size_t sz)
-{
+    printf("next.object.4 %p\n", cursor);
     // Set the start of the path and the length of the data.
-    cursor->startptr   = ptr;
-    cursor->nextptr    = ptr;
-    cursor->endptr     = ptr + sz;
-    cursor->ptr        = NULL;
-    cursor->sys_eos    = false;
-    cursor->eos        = false;
+    cursor->eos = false;
+    cursor->eof = false;
     cursor->last_timestamp      = 0;
     cursor->session_idle_in_sec = 0;
-    cursor->session_event_index = -1;
-    cursor->sys_eof    = !(ptr != NULL && cursor->startptr < cursor->endptr);
-    cursor->eof        = cursor->eof;
+    printf("next.object.5\n");
 
     // Clear the data object if set.
     memset(cursor->data, 0, cursor->data_sz);
 
-    // The first item is the current state so skip it.
-    if(cursor->startptr != NULL && minipack_is_raw(cursor->startptr)) {
-        cursor->startptr += minipack_sizeof_elem_and_data(cursor->startptr);
-        cursor->nextptr = cursor->startptr;
-    }
+    printf("next.object.6\n");
+    sky_cursor_read(cursor, cursor->next, data.mv_data);
+    printf("next.object.7\n");
+
+    return true;
 }
 
-int sky_cursor_peek(sky_cursor *cursor, void **ptr, int64_t *ts, uint32_t *timestamp, bool *in_time_range, bool *eos)
-{
-    sky_event_flag_t flag = *((sky_event_flag_t*)(*ptr));
-
-    // If flag isn't correct then report and exit.
-    if(flag != EVENT_FLAG) return -1;
-    *ptr += sizeof(sky_event_flag_t);
-
-    // Read timestamp.
-    size_t sz;
-    *ts = minipack_unpack_int(*ptr, &sz);
-    if(sz == 0) return -2;
-    *timestamp = sky_timestamp_to_seconds(*ts);
-    *ptr += sz;
-
-    // Check for time boundry.
-    *in_time_range = (cursor->max_timestamp == 0 || *timestamp < cursor->max_timestamp);
-    if(!(*in_time_range)) return 0;
-
-    // Check for session boundry. This only applies if this is not the
-    // first event in the session and a session idle time has been set.
-    if(cursor->last_timestamp > 0 && cursor->session_idle_in_sec > 0) {
-        // If the elapsed time is greater than the idle time then rewind
-        // back to the event we started on at the beginning of the function
-        // and mark the cursor as being "out of session".
-        if((*timestamp) - cursor->last_timestamp >= cursor->session_idle_in_sec) {
-            *eos = true;
-        }
-    }
-
-    return 0;
-}
-
+// Moves the cursor to point to the next event.
 void sky_cursor_next_event(sky_cursor *cursor)
 {
-    // Ignore any calls when the cursor is out of session or EOF.
-    if(cursor->sys_eof || cursor->sys_eos) {
+    // Copy the next event to the current event.
+    memcpy(cursor->data, cursor->next, cursor->data_sz);
+
+    // Read the next event.
+    MDB_val key, data;
+    if(mdb_cursor_get(cursor->lmdb_cursor, &key, &data, MDB_NEXT_DUP) != 0) {
+        cursor->eof = cursor->eos = true;
         return;
     }
 
-    // Move the pointer to the next position.
-    void *prevptr = cursor->ptr;
-    cursor->ptr = cursor->nextptr;
-    void *ptr = cursor->ptr;
+    sky_cursor_read(cursor, cursor->next, data.mv_data);
+}
 
-    // If pointer is beyond the last event then set eof.
-    if(cursor->ptr >= cursor->endptr) {
-        cursor->sys_eof = cursor->eof = true;
-        cursor->sys_eos = cursor->eos = true;
-        cursor->ptr        = NULL;
-        cursor->startptr   = NULL;
-        cursor->nextptr    = NULL;
-        cursor->endptr     = NULL;
-        cursor->next_timestamp = 0;
+// Reads the data at a given pointer into a data object.
+void sky_cursor_read(sky_cursor *cursor, void *data, void *ptr)
+{
+    printf("next.object.6 %p, %p, %p\n", cursor, data, ptr);
+
+    // Set timestamp.
+    int64_t timestamp = htonll(*((int64_t*)ptr));
+    int64_t *data_ts = (int64_t*)(data + cursor->timestamp_descriptor.ts_offset);
+    uint32_t *data_timestamp = (uint32_t*)(data + cursor->timestamp_descriptor.timestamp_offset);
+    *data_ts = timestamp;
+    *data_timestamp = sky_timestamp_to_seconds(timestamp);
+    ptr += 8;
+
+    // Clear old action data.
+    if(cursor->action_data_sz > 0) {
+        memset(data, 0, cursor->action_data_sz);
     }
-    // Otherwise update the event object with data.
-    else {
-        int64_t ts = 0;
-        size_t sz;
-        int rc = sky_cursor_peek(cursor, &ptr, &ts, &cursor->next_timestamp, &cursor->in_time_range, &cursor->sys_eos);
-        if(rc == -1) badcursordata("eflag", ptr);
-        if(rc == -2) badcursordata("timestamp", ptr);
-        if(!cursor->in_time_range) {
-            cursor->ptr = prevptr;
-            return;
+
+    // Read msgpack map!
+    size_t sz;
+    uint32_t count = minipack_unpack_map(ptr, &sz);
+    if(sz == 0) {
+      minipack_unpack_nil(ptr, &sz);
+      if(sz == 0) {
+        badcursordata("datamap", ptr);
+      }
+    }
+    ptr += sz;
+
+    // Loop over key/value pairs.
+    uint32_t i;
+    for(i=0; i<count; i++) {
+        // Read property id (key).
+        int64_t property_id = minipack_unpack_int(ptr, &sz);
+        if(sz == 0) badcursordata("key", ptr);
+        ptr += sz;
+
+        // Read property value and set it on the data object.
+        sky_cursor_set_value(cursor, data, property_id, ptr, &sz);
+        if(sz == 0) {
+          debug("[invalid read, skipping]");
+          sz = minipack_sizeof_elem_and_data(ptr);
         }
-        if(cursor->eos) cursor->ptr = prevptr;
-
-        // Only process the event if we're still in session.
-        if(!cursor->sys_eos) {
-            cursor->session_event_index++;
-
-            // Set timestamp.
-            int64_t *data_ts = (int64_t*)(cursor->data + cursor->timestamp_descriptor.ts_offset);
-            uint32_t *data_timestamp = (uint32_t*)(cursor->data + cursor->timestamp_descriptor.timestamp_offset);
-            *data_ts = ts;
-            *data_timestamp = cursor->next_timestamp;
-
-            // Clear old action data.
-            if(cursor->action_data_sz > 0) {
-              memset(cursor->data, 0, cursor->action_data_sz);
-            }
-
-            // Read msgpack map!
-            uint32_t count = minipack_unpack_map(ptr, &sz);
-            if(sz == 0) {
-              minipack_unpack_nil(ptr, &sz);
-              if(sz == 0) {
-                badcursordata("datamap", ptr);
-              }
-            }
-            ptr += sz;
-
-            // Loop over key/value pairs.
-            uint32_t i;
-            for(i=0; i<count; i++) {
-                // Read property id (key).
-                int64_t property_id = minipack_unpack_int(ptr, &sz);
-                if(sz == 0) badcursordata("key", ptr);
-                ptr += sz;
-
-                // Read property value and set it on the data object.
-                sky_cursor_set_value(cursor, cursor->data, property_id, ptr, &sz);
-                if(sz == 0) {
-                  debug("[invalid read, skipping]");
-                  sz = minipack_sizeof_elem_and_data(ptr);
-                }
-                ptr += sz;
-            }
-
-            cursor->nextptr = ptr;
-
-            // Peek ahead and set current eof/eos.
-            if(cursor->nextptr >= cursor->endptr) {
-                cursor->eof = cursor->eos = true;
-            } else {
-                bool in_time_range;
-                uint32_t timestamp;
-                sky_cursor_peek(cursor, &ptr, &ts, &timestamp, &in_time_range, &cursor->eos);
-            }
-        }
-
-        cursor->last_timestamp = cursor->next_timestamp;
+        ptr += sz;
     }
 }
 
 bool sky_lua_cursor_next_event(sky_cursor *cursor)
 {
     sky_cursor_next_event(cursor);
-    return (!cursor->sys_eof && !cursor->sys_eos && cursor->in_time_range);
+    return (!cursor->eos && cursor->in_time_range);
 }
 
 bool sky_cursor_eof(sky_cursor *cursor)
@@ -543,38 +493,22 @@ bool sky_cursor_eos(sky_cursor *cursor)
     return cursor->eos;
 }
 
-bool sky_cursor_sys_eof(sky_cursor *cursor)
-{
-    return cursor->sys_eof;
-}
-
-bool sky_cursor_sys_eos(sky_cursor *cursor)
-{
-    return cursor->sys_eos;
-}
-
 void sky_cursor_set_session_idle(sky_cursor *cursor, uint32_t seconds)
 {
-    // Save the idle value.
     cursor->session_idle_in_sec = seconds;
-
-    // If the value is non-zero then start sessionizing the cursor.
-    //cursor->sys_eos = (seconds > 0 ? true : cursor->sys_eof);
 }
 
 void sky_cursor_next_session(sky_cursor *cursor)
 {
-    // Set a flag to allow the cursor to continue iterating unless EOF is set.
-    if(cursor->sys_eos) {
-        cursor->session_event_index = -1;
-        cursor->sys_eos = cursor->sys_eof;
+    if(cursor->eos) {
+        cursor->eos = cursor->eof;
     }
 }
 
 bool sky_lua_cursor_next_session(sky_cursor *cursor)
 {
     sky_cursor_next_session(cursor);
-    return !cursor->sys_eof;
+    return !cursor->eof;
 }
 
 

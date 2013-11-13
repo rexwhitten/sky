@@ -19,9 +19,9 @@ typedef struct {
 
 typedef struct sky_cursor_t {
   sky_lua_event_t *event;
+  sky_lua_event_t *next;
   uint32_t next_timestamp;
   uint32_t max_timestamp;
-  int32_t session_event_index;
   uint32_t session_idle_in_sec;
 } sky_cursor_t;
 
@@ -35,8 +35,6 @@ bool sky_cursor_has_next_object(sky_cursor_t *);
 bool sky_cursor_next_object(sky_cursor_t *);
 bool sky_cursor_eof(sky_cursor_t *);
 bool sky_cursor_eos(sky_cursor_t *);
-bool sky_cursor_sys_eof(sky_cursor_t *);
-bool sky_cursor_sys_eos(sky_cursor_t *);
 bool sky_lua_cursor_next_event(sky_cursor_t *);
 bool sky_lua_cursor_next_session(sky_cursor_t *);
 bool sky_cursor_set_session_idle(sky_cursor_t *, uint32_t);
@@ -54,8 +52,6 @@ ffi.metatype('sky_cursor_t', {
     nextObject = function(cursor) return ffi.C.sky_cursor_next_object(cursor) end,
     eof = function(cursor) return ffi.C.sky_cursor_eof(cursor) end,
     eos = function(cursor) return ffi.C.sky_cursor_eos(cursor) end,
-    sys_eof = function(cursor) return ffi.C.sky_cursor_sys_eof(cursor) end,
-    sys_eos = function(cursor) return ffi.C.sky_cursor_sys_eos(cursor) end,
     next = function(cursor) return ffi.C.sky_lua_cursor_next_event(cursor) end,
     next_session = function(cursor) return ffi.C.sky_lua_cursor_next_session(cursor) end,
     set_session_idle = function(cursor, seconds) return ffi.C.sky_cursor_set_session_idle(cursor, seconds) end,
@@ -261,8 +257,9 @@ function sky_aggregate(_cursor, data)
   cursor = ffi.cast('sky_cursor_t*', _cursor)
   if data == nil then data = {} end
   while cursor:nextObject() do
-    status, err = pcall(function() aggregate(cursor, data) end)
-    if not status and err ~= exit_error then error(err) end
+    aggregate(cursor, data)
+    -- status, err = pcall(function() aggregate(cursor, data) end)
+    -- if not status and err ~= exit_error then error(err) end
   end
   return data
 end

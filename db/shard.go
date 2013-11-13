@@ -288,6 +288,9 @@ func (s *shard) GetEvents(tablespace string, id string) ([]*core.Event, error) {
 	// Initialize cursor.
 	if _, _, err := mdbGet2(c, []byte(id), []byte{0}, mdb.GET_RANGE); err == mdb.NotFound {
 		return events, nil
+	} else if err == mdb.Incompatibile {
+		// This only occurs when a db is read before it is created.
+		return events, nil
 	} else if err != nil {
 		return nil, fmt.Errorf("lmdb cursor init error: %s", err)
 	}
