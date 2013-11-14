@@ -85,7 +85,12 @@ func (s *shard) Cursor(tablespace string) (*mdb.Cursor, error) {
 		return nil, fmt.Errorf("shard cursor error: %s", err)
 	}
 
-	return s.cursor(txn, dbi)
+	c, err := s.cursor(txn, dbi)
+	if err != nil {
+		return nil, err
+	}
+
+	return c, err
 }
 
 // cursor retrieves a cursor for iterating over the shard.

@@ -11,23 +11,20 @@ typedef struct sky_string_t {
 } sky_string_t;
 
 typedef struct {
-  {{range .}}{{structdef .}}
-  {{end}}
   int64_t _ts;
   uint32_t _timestamp;
+  {{range .}}{{structdef .}}
+  {{end}}
 } sky_lua_event_t;
 
 typedef struct sky_cursor_t {
   sky_lua_event_t *event;
-  sky_lua_event_t *next;
-  uint32_t next_timestamp;
+  sky_lua_event_t *next_event;
   uint32_t max_timestamp;
   uint32_t session_idle_in_sec;
 } sky_cursor_t;
 
-int sky_cursor_set_data_sz(sky_cursor_t *cursor, uint32_t sz);
-int sky_cursor_set_timestamp_offset(sky_cursor_t *cursor, uint32_t offset);
-int sky_cursor_set_ts_offset(sky_cursor_t *cursor, uint32_t offset);
+int sky_cursor_set_event_sz(sky_cursor_t *cursor, uint32_t sz);
 int sky_cursor_set_property(sky_cursor_t *cursor, int64_t property_id, uint32_t offset, uint32_t sz, const char *data_type);
 int sky_cursor_set_max_timestamp(sky_cursor_t *cursor, uint32_t timestamp);
 
@@ -41,9 +38,7 @@ bool sky_cursor_set_session_idle(sky_cursor_t *, uint32_t);
 ]])
 ffi.metatype('sky_cursor_t', {
   __index = {
-    set_data_sz = function(cursor, sz) return ffi.C.sky_cursor_set_data_sz(cursor, sz) end,
-    set_timestamp_offset = function(cursor, offset) return ffi.C.sky_cursor_set_timestamp_offset(cursor, offset) end,
-    set_ts_offset = function(cursor, offset) return ffi.C.sky_cursor_set_ts_offset(cursor, offset) end,
+    set_event_sz = function(cursor, sz) return ffi.C.sky_cursor_set_event_sz(cursor, sz) end,
     set_action_id_offset = function(cursor, offset) return ffi.C.sky_cursor_set_action_id_offset(cursor, offset) end,
     set_property = function(cursor, property_id, offset, sz, data_type) return ffi.C.sky_cursor_set_property(cursor, property_id, offset, sz, data_type) end,
     set_max_timestamp = function(cursor, timestamp) return ffi.C.sky_cursor_set_max_timestamp(cursor, timestamp) end,
@@ -69,9 +64,7 @@ function sky_init_cursor(_cursor)
   cursor = ffi.cast('sky_cursor_t*', _cursor)
   {{range .}}{{initdescriptor .}}
   {{end}}
-  cursor:set_timestamp_offset(ffi.offsetof('sky_lua_event_t', '_timestamp'))
-  cursor:set_ts_offset(ffi.offsetof('sky_lua_event_t', '_ts'))
-  cursor:set_data_sz(ffi.sizeof('sky_lua_event_t'))
+  cursor:set_event_sz(ffi.sizeof('sky_lua_event_t'))
 end
 
 -- A reference to the error thrown when exiting an object query.

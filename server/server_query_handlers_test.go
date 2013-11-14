@@ -22,7 +22,7 @@ func TestServerSimpleCountQuery(t *testing.T) {
 		setupTestTable("bar")
 		setupTestProperty("bar", "fruit", true, "string")
 		setupTestData(t, "bar", [][]string{
-			[]string{"a0", "2012-01-01T00:00:00Z", `{"data":{"fruit":"grape"}}`},
+			[]string{"xx", "2012-01-01T00:00:00Z", `{"data":{"fruit":"grape"}}`},
 		})
 
 		// Run query.

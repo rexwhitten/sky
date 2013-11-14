@@ -63,8 +63,8 @@ int mp_unpack(lua_State *L);
 // memdump(cursor->startptr, (cursor->endptr - cursor->startptr));
 
 #define badcursordata(MSG, PTR) do {\
-    fprintf(stderr, "Cursor pointing at invalid raw event data [" MSG "]: %p->%p\n", cursor->ptr, PTR); \
-    cursor->eof = true; \
+    fprintf(stderr, "Cursor pointing at invalid raw event data [" MSG "]: %p\n", PTR); \
+    cursor->next_event->timestamp = 0; \
     return; \
 } while(0)
 
@@ -98,24 +98,23 @@ typedef struct {
     sky_property_descriptor_clear_func clear_func;
 } sky_property_descriptor;
 
-struct sky_cursor {
-    void *data;
-    void *next;
+typedef struct {
+  int64_t ts;
+  uint32_t timestamp;
+} sky_event;
 
-    uint32_t next_timestamp;
+struct sky_cursor {
+    void *obj;
+    void *next_obj;
+
+    sky_event *event;
+    sky_event *next_event;
+
     uint32_t max_timestamp;
     uint32_t session_idle_in_sec;
 
-    uint32_t data_sz;
-    uint32_t action_data_sz;
-
-    void *ptr;
-    bool eof;
-    bool eos;
-    bool sys_eof;
-    bool sys_eos;
-    bool in_time_range;
-    uint32_t last_timestamp;
+    uint32_t event_sz;
+    uint32_t action_event_sz;
 
     sky_timestamp_descriptor timestamp_descriptor;
     sky_property_descriptor *property_descriptors;
@@ -168,7 +167,11 @@ void sky_clear_boolean(void *target);
 
 bool sky_cursor_next_object(sky_cursor *cursor);
 
-void sky_cursor_read(sky_cursor *cursor, void *data, void *ptr);
+void sky_cursor_read(sky_cursor *cursor, sky_event *event, void *ptr);
+
+bool sky_cursor_eof(sky_cursor *cursor);
+
+bool sky_cursor_eos(sky_cursor *cursor);
 
 //--------------------------------------
 // Timestamps
@@ -285,10 +288,10 @@ void sky_cursor_free(sky_cursor *cursor)
         cursor->property_zero_descriptor = NULL;
         cursor->property_count = 0;
 
-        if(cursor->data != NULL) free(cursor->data);
-        cursor->data = NULL;
-        if(cursor->next != NULL) free(cursor->next);
-        cursor->next = NULL;
+        if(cursor->event != NULL) free(cursor->event);
+        cursor->event = NULL;
+        if(cursor->next_event != NULL) free(cursor->next_event);
+        cursor->next_event = NULL;
         if(cursor->key_prefix != NULL) free(cursor->key_prefix);
         cursor->key_prefix = NULL;
 
@@ -317,24 +320,16 @@ void sky_cursor_set_value(sky_cursor *cursor, void *target,
 // Descriptor Management
 //--------------------------------------
 
-void sky_cursor_set_data_sz(sky_cursor *cursor, uint32_t sz) {
-    cursor->data_sz = sz;
+void sky_cursor_set_event_sz(sky_cursor *cursor, uint32_t sz) {
+    cursor->event_sz = sz;
 
-    if(cursor->data != NULL) free(cursor->data);
-    cursor->data = calloc(1, sz);
-    if(cursor->data == NULL) debug("[malloc] Unable to allocate cursor data.");
+    if(cursor->event != NULL) free(cursor->event);
+    cursor->event = calloc(1, sz);
+    if(cursor->event == NULL) debug("[malloc] Unable to allocate cursor event.");
 
-    if(cursor->next != NULL) free(cursor->next);
-    cursor->next = calloc(1, sz);
-    if(cursor->next == NULL) debug("[malloc] Unable to allocate cursor next.");
-}
-
-void sky_cursor_set_timestamp_offset(sky_cursor *cursor, uint32_t offset) {
-    cursor->timestamp_descriptor.timestamp_offset = offset;
-}
-
-void sky_cursor_set_ts_offset(sky_cursor *cursor, uint32_t offset) {
-    cursor->timestamp_descriptor.ts_offset = offset;
+    if(cursor->next_event != NULL) free(cursor->next_event);
+    cursor->next_event = calloc(1, sz);
+    if(cursor->next_event == NULL) debug("[malloc] Unable to allocate cursor next event.");
 }
 
 // Sets the data type and offset for a given property id.
@@ -370,9 +365,11 @@ void sky_cursor_set_property(sky_cursor *cursor, int64_t property_id,
         property_descriptor->clear_func = sky_clear_boolean;
     }
 
-    // Resize the action data area.
-    if(property_id < 0 && offset+sz > cursor->action_data_sz) {
-        cursor->action_data_sz = offset+sz;
+    // Resize the action data area. This area occurs after the
+    // fixed fields in the struct.
+    size_t new_action_event_sz = (offset + sz) - sizeof(sky_event);
+    if(property_id < 0 && new_action_event_sz > cursor->action_event_sz) {
+        cursor->action_event_sz = new_action_event_sz;
     }
 }
 
@@ -384,32 +381,27 @@ void sky_cursor_set_property(sky_cursor *cursor, int64_t property_id,
 // Moves the cursor to point to the next object.
 bool sky_cursor_next_object(sky_cursor *cursor)
 {
-    printf("next.object.1\n");
-
     // Move to next object.
     MDB_val key, data;
-    if(cursor->lmdb_cursor == NULL || mdb_cursor_get(cursor->lmdb_cursor, &key, &data, MDB_NEXT) != 0) {
-        printf("next.object.2\n");
+    int rc = mdb_cursor_get(cursor->lmdb_cursor, &key, &data, MDB_NEXT);
+    if(rc != 0) {
         return false;
     } else if(cursor->key_prefix != NULL && (key.mv_size < cursor->key_prefix_sz || memcmp(cursor->key_prefix, key.mv_data, cursor->key_prefix_sz) != 0)) {
-        printf("next.object.3\n");
         return false;
     }
 
-    printf("next.object.4 %p\n", cursor);
     // Set the start of the path and the length of the data.
-    cursor->eos = false;
-    cursor->eof = false;
-    cursor->last_timestamp      = 0;
     cursor->session_idle_in_sec = 0;
-    printf("next.object.5\n");
 
     // Clear the data object if set.
-    memset(cursor->data, 0, cursor->data_sz);
+    memset(cursor->event, 0, cursor->event_sz);
 
-    printf("next.object.6\n");
-    sky_cursor_read(cursor, cursor->next, data.mv_data);
-    printf("next.object.7\n");
+    // Print out key data.
+    printf("%p ", cursor);
+    int i; for(i=0; i<key.mv_size; i++) printf("%02x", ((char*)key.mv_data)[i]); printf(" -> ");
+    for(i=0; i<key.mv_size; i++) printf("%c", ((char*)key.mv_data)[i]); printf("\n");
+
+    sky_cursor_read(cursor, cursor->next_event, data.mv_data);
 
     return true;
 }
@@ -418,34 +410,35 @@ bool sky_cursor_next_object(sky_cursor *cursor)
 void sky_cursor_next_event(sky_cursor *cursor)
 {
     // Copy the next event to the current event.
-    memcpy(cursor->data, cursor->next, cursor->data_sz);
+    memcpy(cursor->event, cursor->next_event, cursor->event_sz);
 
     // Read the next event.
     MDB_val key, data;
-    if(mdb_cursor_get(cursor->lmdb_cursor, &key, &data, MDB_NEXT_DUP) != 0) {
-        cursor->eof = cursor->eos = true;
+    int rc = mdb_cursor_get(cursor->lmdb_cursor, &key, &data, MDB_NEXT_DUP);
+    if(rc != 0) {
+        // Clear next event if there isn't one.
+        memset(cursor->next_event, 0, cursor->event_sz);
+
+        if(rc != MDB_NOTFOUND) {
+            printf("lmdb cursor error: %d\n", rc);
+        }
         return;
     }
 
-    sky_cursor_read(cursor, cursor->next, data.mv_data);
+    sky_cursor_read(cursor, cursor->next_event, data.mv_data);
 }
 
 // Reads the data at a given pointer into a data object.
-void sky_cursor_read(sky_cursor *cursor, void *data, void *ptr)
+void sky_cursor_read(sky_cursor *cursor, sky_event *event, void *ptr)
 {
-    printf("next.object.6 %p, %p, %p\n", cursor, data, ptr);
-
     // Set timestamp.
-    int64_t timestamp = htonll(*((int64_t*)ptr));
-    int64_t *data_ts = (int64_t*)(data + cursor->timestamp_descriptor.ts_offset);
-    uint32_t *data_timestamp = (uint32_t*)(data + cursor->timestamp_descriptor.timestamp_offset);
-    *data_ts = timestamp;
-    *data_timestamp = sky_timestamp_to_seconds(timestamp);
+    event->ts = htonll(*((int64_t*)ptr));
+    event->timestamp = sky_timestamp_to_seconds(event->ts);
     ptr += 8;
 
     // Clear old action data.
-    if(cursor->action_data_sz > 0) {
-        memset(data, 0, cursor->action_data_sz);
+    if(cursor->action_event_sz > 0) {
+        memset(event+sizeof(*event), 0, cursor->action_event_sz);
     }
 
     // Read msgpack map!
@@ -468,7 +461,7 @@ void sky_cursor_read(sky_cursor *cursor, void *data, void *ptr)
         ptr += sz;
 
         // Read property value and set it on the data object.
-        sky_cursor_set_value(cursor, data, property_id, ptr, &sz);
+        sky_cursor_set_value(cursor, event, property_id, ptr, &sz);
         if(sz == 0) {
           debug("[invalid read, skipping]");
           sz = minipack_sizeof_elem_and_data(ptr);
@@ -480,17 +473,23 @@ void sky_cursor_read(sky_cursor *cursor, void *data, void *ptr)
 bool sky_lua_cursor_next_event(sky_cursor *cursor)
 {
     sky_cursor_next_event(cursor);
-    return (!cursor->eos && cursor->in_time_range);
+    return !sky_cursor_eof(cursor);
 }
 
 bool sky_cursor_eof(sky_cursor *cursor)
 {
-    return cursor->eof;
+    return (cursor->event->timestamp == 0);
 }
 
+// End-of-session (EOS) is defined by idle time between the current event and the next event.
 bool sky_cursor_eos(sky_cursor *cursor)
 {
-    return cursor->eos;
+    if(sky_cursor_eof(cursor)) {
+        return true;
+    } else if(cursor->session_idle_in_sec == 0) {
+        return false;
+    }
+    return (cursor->next_event->timestamp - cursor->event->timestamp > cursor->session_idle_in_sec);
 }
 
 void sky_cursor_set_session_idle(sky_cursor *cursor, uint32_t seconds)
@@ -500,15 +499,17 @@ void sky_cursor_set_session_idle(sky_cursor *cursor, uint32_t seconds)
 
 void sky_cursor_next_session(sky_cursor *cursor)
 {
-    if(cursor->eos) {
-        cursor->eos = cursor->eof;
+    // HACK: This works to make the session idle time zero.
+    // A next_event() call still needs to be made after this.
+    if(!sky_cursor_eof(cursor)) {
+        memcpy(cursor->event, cursor->next_event, cursor->event_sz);
     }
 }
 
 bool sky_lua_cursor_next_session(sky_cursor *cursor)
 {
     sky_cursor_next_session(cursor);
-    return !cursor->eof;
+    return !sky_cursor_eof(cursor);
 }
 
 
@@ -764,21 +765,20 @@ func (e *ExecutionEngine) setLmdbCursor(lmdbCursor *mdb.Cursor) error {
 	// Attach the new cursor.
 	e.lmdbCursor = lmdbCursor
 	if e.lmdbCursor != nil {
-		// CursorRenew()?
 		e.cursor.lmdb_cursor = e.lmdbCursor.MdbCursor()
 
-		// Move the cursor to the prefix start.
-		prefix := e.query.Prefix
-		if len(prefix) > 0 {
-			if _, _, err := e.lmdbCursor.Get([]byte(prefix), mdb.SET_RANGE); err != nil && err != mdb.NotFound {
-				return fmt.Errorf("skyd.ExecutionEngine: Unable to set lmdb range [%v]: %v", prefix, err)
-			} else if err == nil {
-				if _, _, err := e.lmdbCursor.Get(nil, mdb.PREV); err != nil && err != mdb.NotFound {
-					return fmt.Errorf("skyd.ExecutionEngine: Unable to init lmdb range: %v", prefix, err)
-				}
-			}
-		}
-	}
+        // Move the cursor to the prefix start.
+        prefix := []byte(e.query.Prefix)
+        if len(prefix) > 0 {
+            if _, _, err := e.lmdbCursor.Get(prefix, mdb.SET_RANGE); err != nil && err != mdb.NotFound {
+                return fmt.Errorf("skyd.ExecutionEngine: Unable to set lmdb range [%v]: %v", prefix, err)
+            } else if err == nil {
+                if _, _, err := e.lmdbCursor.Get(nil, mdb.PREV); err != nil && err != mdb.NotFound {
+                    return fmt.Errorf("skyd.ExecutionEngine: Unable to init lmdb range: %v", prefix, err)
+                }
+            }
+        }
+    }
 
 	return nil
 }
