@@ -5,7 +5,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"runtime"
+//	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -13,7 +13,7 @@ import (
 	"github.com/skydb/sky/core"
 )
 
-var defaultShardCount = runtime.NumCPU()
+var defaultShardCount = 1 // runtime.NumCPU()
 
 // DB represents access to the low-level data store.
 type DB interface {

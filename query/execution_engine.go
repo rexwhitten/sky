@@ -283,6 +283,8 @@ sky_cursor *sky_cursor_new(int32_t min_property_id,
 // Removes a cursor reference from memory.
 void sky_cursor_free(sky_cursor *cursor)
 {
+    fprintf(stderr, "free.1 %p\n", cursor);
+
     if(cursor) {
         if(cursor->property_descriptors != NULL) free(cursor->property_descriptors);
         cursor->property_zero_descriptor = NULL;
@@ -381,6 +383,8 @@ void sky_cursor_set_property(sky_cursor *cursor, int64_t property_id,
 // Moves the cursor to point to the next object.
 bool sky_cursor_next_object(sky_cursor *cursor)
 {
+    fprintf(stderr, "obj.1\n");
+
     // Move to next object.
     MDB_val key, data;
     int rc = mdb_cursor_get(cursor->lmdb_cursor, &key, &data, MDB_NEXT);
@@ -390,6 +394,7 @@ bool sky_cursor_next_object(sky_cursor *cursor)
         return false;
     }
 
+    fprintf(stderr, "obj.2\n");
     // Set the start of the path and the length of the data.
     cursor->session_idle_in_sec = 0;
 
@@ -409,28 +414,38 @@ bool sky_cursor_next_object(sky_cursor *cursor)
 // Moves the cursor to point to the next event.
 void sky_cursor_next_event(sky_cursor *cursor)
 {
+    fprintf(stderr, "ev.1\n");
+
     // Copy the next event to the current event.
     memcpy(cursor->event, cursor->next_event, cursor->event_sz);
 
+    fprintf(stderr, "ev.2\n");
     // Read the next event.
     MDB_val key, data;
     int rc = mdb_cursor_get(cursor->lmdb_cursor, &key, &data, MDB_NEXT_DUP);
+    fprintf(stderr, "ev.2.1\n");
     if(rc != 0) {
+    fprintf(stderr, "ev.2.2 %p / %d\n", cursor->next_event, cursor->event_sz);
         // Clear next event if there isn't one.
         memset(cursor->next_event, 0, cursor->event_sz);
 
         if(rc != MDB_NOTFOUND) {
+        fprintf(stderr, "ev.2.3\n");
             printf("lmdb cursor error: %d\n", rc);
         }
+        fprintf(stderr, "ev.2.4\n");
         return;
     }
 
+    fprintf(stderr, "ev.3\n");
     sky_cursor_read(cursor, cursor->next_event, data.mv_data);
 }
 
 // Reads the data at a given pointer into a data object.
 void sky_cursor_read(sky_cursor *cursor, sky_event *event, void *ptr)
 {
+    fprintf(stderr, "read.1\n");
+
     // Set timestamp.
     event->ts = htonll(*((int64_t*)ptr));
     event->timestamp = sky_timestamp_to_seconds(event->ts);
@@ -440,6 +455,8 @@ void sky_cursor_read(sky_cursor *cursor, sky_event *event, void *ptr)
     if(cursor->action_event_sz > 0) {
         memset(event+sizeof(*event), 0, cursor->action_event_sz);
     }
+
+    fprintf(stderr, "read.2\n\n");
 
     // Read msgpack map!
     size_t sz;
@@ -452,14 +469,19 @@ void sky_cursor_read(sky_cursor *cursor, sky_event *event, void *ptr)
     }
     ptr += sz;
 
+    fprintf(stderr, "read.3\n");
+
     // Loop over key/value pairs.
     uint32_t i;
     for(i=0; i<count; i++) {
+        fprintf(stderr, "read.3.1\n");
+
         // Read property id (key).
         int64_t property_id = minipack_unpack_int(ptr, &sz);
         if(sz == 0) badcursordata("key", ptr);
         ptr += sz;
 
+        fprintf(stderr, "read.3.2\n");
         // Read property value and set it on the data object.
         sky_cursor_set_value(cursor, event, property_id, ptr, &sz);
         if(sz == 0) {
@@ -468,16 +490,19 @@ void sky_cursor_read(sky_cursor *cursor, sky_event *event, void *ptr)
         }
         ptr += sz;
     }
+    fprintf(stderr, "read.4\n");
 }
 
 bool sky_lua_cursor_next_event(sky_cursor *cursor)
 {
     sky_cursor_next_event(cursor);
+    fprintf(stderr, "eof.1\n");
     return !sky_cursor_eof(cursor);
 }
 
 bool sky_cursor_eof(sky_cursor *cursor)
 {
+    fprintf(stderr, "eof.2 %d\n", cursor->event->timestamp);
     return (cursor->event->timestamp == 0);
 }
 

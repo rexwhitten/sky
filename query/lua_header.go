@@ -250,9 +250,8 @@ function sky_aggregate(_cursor, data)
   cursor = ffi.cast('sky_cursor_t*', _cursor)
   if data == nil then data = {} end
   while cursor:nextObject() do
-    aggregate(cursor, data)
-    -- status, err = pcall(function() aggregate(cursor, data) end)
-    -- if not status and err ~= exit_error then error(err) end
+    status, err = pcall(function() aggregate(cursor, data) end)
+    if not status and err ~= exit_error then error(err) end
   end
   return data
 end

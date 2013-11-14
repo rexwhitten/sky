@@ -50,7 +50,7 @@ func TestServerOneDimensionCountQuery(t *testing.T) {
 
 		// Run query.
 		query := `{"query":"SELECT count() AS count GROUP BY fruit"}`
-		//_codegen(t, "foo", query)
+		_codegen(t, "foo", query)
 		resp, _ := sendTestHttpRequest("POST", "http://localhost:8586/tables/foo/query", "application/json", query)
 		assertResponse(t, resp, 200, `{"fruit":{"":{"count":1},"apple":{"count":2},"grape":{"count":1},"orange":{"count":1}}}`+"\n", "POST /tables/:name/query failed.")
 	})
