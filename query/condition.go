@@ -202,7 +202,7 @@ func (c *Condition) CodegenAggregateFunction(init bool) (string, error) {
 	fmt.Fprintf(buffer, "%s\n", lineStartRegex.ReplaceAllString(c.String(), "-- "))
 	fmt.Fprintf(buffer, "function %s(cursor, data)\n", c.FunctionName(init))
 	if c.WithinRangeStart > 0 {
-		fmt.Fprintf(buffer, "  if cursor:sys_eos() or cursor:sys_eof() then return false end\n")
+		fmt.Fprintf(buffer, "  if cursor:eos() or cursor:eof() then return false end\n")
 	}
 	if c.WithinUnits == UnitSteps {
 		fmt.Fprintf(buffer, "  index = 0\n")

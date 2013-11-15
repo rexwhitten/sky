@@ -102,7 +102,7 @@ func (l *EventLoop) CodegenAggregateFunction(init bool) (string, error) {
 	fmt.Fprintf(buffer, "%s\n", lineStartRegex.ReplaceAllString(l.String(), "-- "))
 	fmt.Fprintf(buffer, "function %s(cursor, data)\n", l.FunctionName(init))
 	fmt.Fprintln(buffer, "  repeat")
-	fmt.Fprintln(buffer, "  if cursor.next_timestamp == 0 or (cursor.max_timestamp > 0 and cursor.next_timestamp >= cursor.max_timestamp) then return end")
+	// fmt.Fprintln(buffer, "  if cursor.max_timestamp > 0 and cursor.event:timestamp() >= cursor.max_timestamp then return end")
 	for _, statement := range l.statements {
 		fmt.Fprintf(buffer, "    %s(cursor, data)\n", statement.FunctionName(init))
 	}

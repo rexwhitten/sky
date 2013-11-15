@@ -104,11 +104,13 @@ func (l *SessionLoop) CodegenAggregateFunction(init bool) (string, error) {
 	fmt.Fprintf(buffer, "function %s(cursor, data)\n", l.FunctionName(init))
 	fmt.Fprintf(buffer, "  cursor:set_session_idle(%d)\n", l.IdleDuration)
 	fmt.Fprintln(buffer, "  while true do")
+	fmt.Fprintln(buffer, "    repeat")
 	for _, statement := range l.statements {
-		fmt.Fprintf(buffer, "    %s(cursor, data)\n", statement.FunctionName(init))
+		fmt.Fprintf(buffer, "      %s(cursor, data)\n", statement.FunctionName(init))
 	}
-	fmt.Fprintln(buffer, "    if not cursor:next_session() then break end")
-	fmt.Fprintln(buffer, "    cursor:next()")
+	fmt.Fprintln(buffer, "    until not cursor:next()")
+	fmt.Fprintln(buffer, "  if not cursor:next_session() then break end")
+	fmt.Fprintln(buffer, "  cursor:next()")
 	fmt.Fprintln(buffer, "  end")
 	fmt.Fprintln(buffer, "  cursor:set_session_idle(0)")
 	fmt.Fprintln(buffer, "end")

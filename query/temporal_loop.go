@@ -178,7 +178,7 @@ func (l *TemporalLoop) CodegenAggregateFunction(init bool) (string, error) {
 	fmt.Fprintf(buffer, "    %s = %s + 1\n", ref, ref)
 	fmt.Fprintf(buffer, "    cursor.max_timestamp = cursor.max_timestamp + %d\n", l.step)
 	if l.duration == 0 {
-		fmt.Fprintf(buffer, "  if cursor:sys_eof() then break end\n")
+		fmt.Fprintf(buffer, "  if cursor:eof() then break end\n")
 	}
 
 	// Execute each statement.

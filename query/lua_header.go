@@ -11,6 +11,8 @@ typedef struct sky_string_t {
 } sky_string_t;
 
 typedef struct {
+  bool _eos;
+  bool _eof;
   int64_t _ts;
   uint32_t _timestamp;
   {{range .}}{{structdef .}}
@@ -135,7 +137,7 @@ end
 
 -- Checks if a value is an average.
 function sky_is_average(average)
-   return (average ~= nil and average.__average__ == true)
+  return (average ~= nil and average.__average__ == true)
 end
 
 -- Creates a new average object.
@@ -157,8 +159,8 @@ function sky_average_merge(a, b)
   elseif b ~= nil then
     a.count = a.count + b.count
     a.sum = a.sum + b.sum
-    a.avg = a.sum / a.count
   end
+  a.avg = a.sum / a.count
   return a
 end
 
@@ -191,11 +193,12 @@ function sky_distinct_merge(a, b)
     a = b
   elseif b ~= nil then
     for k,v in pairs(b.values) do sky_distinct_insert(a, k) end
-
-    local count = 0
-    for k,v in pairs(a.values) do count = count + 1 end
-    a.distinct = count
   end
+
+  local count = 0
+  for k,v in pairs(a.values) do count = count + 1 end
+  a.distinct = count
+
   return a
 end
 

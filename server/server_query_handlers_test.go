@@ -27,6 +27,7 @@ func TestServerSimpleCountQuery(t *testing.T) {
 
 		// Run query.
 		query := `{"query":{"statements":"SELECT count()"}}`
+		// _codegen(t, "foo", query)
 		resp, _ := sendTestHttpRequest("POST", "http://localhost:8586/tables/foo/query", "application/json", query)
 		assertResponse(t, resp, 200, `{"count":5}`+"\n", "POST /tables/:name/query failed.")
 		resp, _ = sendTestHttpRequest("POST", "http://localhost:8586/tables/bar/query", "application/json", query)
@@ -50,7 +51,7 @@ func TestServerOneDimensionCountQuery(t *testing.T) {
 
 		// Run query.
 		query := `{"query":"SELECT count() AS count GROUP BY fruit"}`
-		_codegen(t, "foo", query)
+		// _codegen(t, "foo", query)
 		resp, _ := sendTestHttpRequest("POST", "http://localhost:8586/tables/foo/query", "application/json", query)
 		assertResponse(t, resp, 200, `{"fruit":{"":{"count":1},"apple":{"count":2},"grape":{"count":1},"orange":{"count":1}}}`+"\n", "POST /tables/:name/query failed.")
 	})
@@ -79,13 +80,13 @@ func TestServerMultiDimensionalQuery(t *testing.T) {
 		query := `{"query":"` +
 			`SELECT count() AS count, sum(price) AS sum GROUP BY gender, state INTO \"s1\" ` +
 			`SELECT min(price) AS minimum, max(price) AS maximum GROUP BY gender, state ` +
-			`SELECT sum((price + num) * 2) AS sum INTO \"_\" ` +
-			`SELECT avg(price) AS average INTO \"_\" ` +
-			`SELECT count(DISTINCT price) AS distinct INTO \"_\" ` +
+			`SELECT sum((price + num) * 2) AS sum INTO \"X\" ` +
+			`SELECT avg(price) AS average INTO \"X\" ` +
+			`SELECT count(DISTINCT price) AS distinct INTO \"X\" ` +
 			`"}`
-		//_codegen(t, "foo", query)
+		// _codegen(t, "foo", query)
 		resp, _ := sendTestHttpRequest("POST", "http://localhost:8586/tables/foo/query", "application/json", query)
-		assertResponse(t, resp, 200, `{"_":{"average":60,"distinct":6,"sum":2720},"gender":{"f":{"state":{"NY":{"maximum":30,"minimum":30}}},"m":{"state":{"CA":{"maximum":20,"minimum":0},"NY":{"maximum":200,"minimum":100}}}},"s1":{"gender":{"f":{"state":{"NY":{"count":1,"sum":30}}},"m":{"state":{"CA":{"count":3,"sum":30},"NY":{"count":2,"sum":300}}}}}}`+"\n", "POST /tables/:name/query failed.")
+		assertResponse(t, resp, 200, `{"X":{"average":60,"distinct":6,"sum":2720},"gender":{"f":{"state":{"NY":{"maximum":30,"minimum":30}}},"m":{"state":{"CA":{"maximum":20,"minimum":0},"NY":{"maximum":200,"minimum":100}}}},"s1":{"gender":{"f":{"state":{"NY":{"count":1,"sum":30}}},"m":{"state":{"CA":{"count":3,"sum":30},"NY":{"count":2,"sum":300}}}}}}`+"\n", "POST /tables/:name/query failed.")
 	})
 }
 
@@ -160,20 +161,24 @@ func TestServerSessionizedFunnelAnalysisQuery(t *testing.T) {
 		})
 
 		// Run query.
-		query := `{
-			"statements":"` +
-			`FOR EACH SESSION DELIMITED BY 2 HOURS ` +
-			`  FOR EACH EVENT ` +
-			`    WHEN action == \"A0\" THEN ` +
-			`      WHEN action == \"A1\" WITHIN 1..1 STEPS THEN ` +
-			`        SELECT count() AS count GROUP BY action ` +
-			`      END ` +
-			`    END ` +
-			`  END ` +
-			`END` +
-			`"}`
-		// _codegen(t, "foo", query)
-		resp, _ := sendTestHttpRequest("POST", "http://localhost:8586/tables/foo/query", "application/json", query)
+		query := `
+			FOR EACH SESSION DELIMITED BY 2 HOURS
+			DEBUG("SESSION")
+			  FOR EACH EVENT
+			DEBUG(timestamp)
+			    WHEN action == "A0" THEN
+			DEBUG("A0")
+			      WHEN action == "A1" WITHIN 1..1 STEPS THEN
+			DEBUG("A1")
+			        SELECT count() AS count GROUP BY action
+			      END
+			    END
+			  END
+			END
+			`
+		q, _ := json.Marshal(query)
+		// _codegen(t, "foo", `{"query":`+string(q)+`}`))
+		resp, _ := sendTestHttpRequest("POST", "http://localhost:8586/tables/foo/query", "application/json", `{"query":`+string(q)+`}`)
 		assertResponse(t, resp, 200, `{"action":{"A1":{"count":1}}}`+"\n", "POST /tables/:name/query failed.")
 	})
 }
@@ -194,12 +199,15 @@ func TestServerSystemVariables(t *testing.T) {
 
 		query := `
 			FOR EACH SESSION DELIMITED BY 2 HOURS
+			  DEBUG("SESSION")
 			  FOR EACH EVENT
+			    DEBUG("EVENT")
 				SELECT count() AS count GROUP BY action, @@eos, @@eof
 			  END
 			END
 		`
 		q, _ := json.Marshal(query)
+		_codegen(t, "foo", `{"query":`+string(q)+`}`)
 		resp, _ := sendTestHttpRequest("POST", "http://localhost:8586/tables/foo/query", "application/json", `{"query":`+string(q)+`}`)
 		assertResponse(t, resp, 200, `{"action":{"A0":{"eos":{"false":{"eof":{"false":{"count":1}}},"true":{"eof":{"false":{"count":1},"true":{"count":1}}}}},"A1":{"eos":{"true":{"eof":{"false":{"count":1},"true":{"count":1}}}}}}}`+"\n", "POST /tables/:name/query failed.")
 	})

@@ -325,7 +325,8 @@ func (q *Query) CodegenAggregateFunction(init bool) string {
 	}
 
 	// Begin cursor loop.
-	fmt.Fprintln(buffer, "  while cursor:next() do")
+	fmt.Fprintln(buffer, "  cursor:next()")
+	fmt.Fprintln(buffer, "  repeat")
 
 	// Call each statement function.
 	for _, statement := range q.statements {
@@ -333,7 +334,7 @@ func (q *Query) CodegenAggregateFunction(init bool) string {
 	}
 
 	// End cursor loop.
-	fmt.Fprintln(buffer, "  end")
+	fmt.Fprintln(buffer, "  until not cursor:next()")
 
 	// End function.
 	fmt.Fprintln(buffer, "end\n")
