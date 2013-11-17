@@ -101,8 +101,8 @@ typedef struct {
 typedef struct {
   bool eos;
   bool eof;
-  int64_t ts;
   uint32_t timestamp;
+  int64_t ts;
 } sky_event;
 
 struct sky_cursor {
@@ -115,6 +115,7 @@ struct sky_cursor {
     bool eos_wait;
     uint32_t event_sz;
     uint32_t action_event_sz;
+    uint32_t variable_event_sz;
 
     sky_timestamp_descriptor timestamp_descriptor;
     sky_property_descriptor *property_descriptors;
@@ -341,37 +342,46 @@ void sky_cursor_set_property(sky_cursor *cursor, int64_t property_id,
     sky_property_descriptor *property_descriptor = &cursor->property_zero_descriptor[property_id];
 
     // Set the offset and set_func function on the descriptor.
-    property_descriptor->offset = offset;
-    if(strlen(data_type) == 0) {
-        property_descriptor->set_func = sky_set_noop;
-        property_descriptor->clear_func = NULL;
-    }
-    else if(strcmp(data_type, "string") == 0) {
-        property_descriptor->set_func = sky_set_string;
-        property_descriptor->clear_func = sky_clear_string;
-    }
-    else if(strcmp(data_type, "factor") == 0 || strcmp(data_type, "integer") == 0) {
-        property_descriptor->set_func = sky_set_int;
-        property_descriptor->clear_func = sky_clear_int;
-    }
-    else if(strcmp(data_type, "float") == 0) {
-        property_descriptor->set_func = sky_set_double;
-        property_descriptor->clear_func = sky_clear_double;
-    }
-    else if(strcmp(data_type, "boolean") == 0) {
-        property_descriptor->set_func = sky_set_boolean;
-        property_descriptor->clear_func = sky_clear_boolean;
-    }
-    else {
-        property_descriptor->set_func = sky_set_boolean;
-        property_descriptor->clear_func = sky_clear_boolean;
+    if(property_id != 0) {
+        property_descriptor->offset = offset;
+        if(strlen(data_type) == 0) {
+            property_descriptor->set_func = sky_set_noop;
+            property_descriptor->clear_func = NULL;
+        }
+        else if(strcmp(data_type, "string") == 0) {
+            property_descriptor->set_func = sky_set_string;
+            property_descriptor->clear_func = sky_clear_string;
+        }
+        else if(strcmp(data_type, "factor") == 0 || strcmp(data_type, "integer") == 0) {
+            property_descriptor->set_func = sky_set_int;
+            property_descriptor->clear_func = sky_clear_int;
+        }
+        else if(strcmp(data_type, "float") == 0) {
+            property_descriptor->set_func = sky_set_double;
+            property_descriptor->clear_func = sky_clear_double;
+        }
+        else if(strcmp(data_type, "boolean") == 0) {
+            property_descriptor->set_func = sky_set_boolean;
+            property_descriptor->clear_func = sky_clear_boolean;
+        }
+        else {
+            property_descriptor->set_func = sky_set_boolean;
+            property_descriptor->clear_func = sky_clear_boolean;
+        }    
     }
 
     // Resize the action data area. This area occurs after the
     // fixed fields in the struct.
-    size_t new_action_event_sz = (offset + sz) - sizeof(sky_event);
+    int32_t new_action_event_sz = (offset + sz) - sizeof(sky_event);
     if(property_id < 0 && new_action_event_sz > cursor->action_event_sz) {
-        cursor->action_event_sz = new_action_event_sz;
+        cursor->action_event_sz = (uint32_t)new_action_event_sz;
+    }
+
+    // Resize the variable data area. This area occurs after the
+    // action data fields in the struct.
+    int32_t new_variable_event_sz = (offset + sz) - sizeof(sky_event);
+    if(property_id == 0 && new_variable_event_sz > 0 && new_variable_event_sz > cursor->variable_event_sz) {
+        cursor->variable_event_sz = (uint32_t)new_variable_event_sz;
     }
 }
 
@@ -383,8 +393,6 @@ void sky_cursor_set_property(sky_cursor *cursor, int64_t property_id,
 // Moves the cursor to point to the next object.
 bool sky_cursor_next_object(sky_cursor *cursor)
 {
-    fprintf(stderr, "\nnext.obj.1 %p | %p\n", cursor, cursor->lmdb_cursor);
-
     // Move to next object.
     MDB_val key, data;
     int rc = mdb_cursor_get(cursor->lmdb_cursor, &key, &data, MDB_NEXT);
@@ -394,10 +402,9 @@ bool sky_cursor_next_object(sky_cursor *cursor)
         return false;
     }
 
-    fprintf(stderr, "next.obj.2 ");
     // Print out key data.
-    int i; for(i=0; i<key.mv_size; i++) printf("%02x", ((char*)key.mv_data)[i]); printf(" -> ");
-    for(i=0; i<key.mv_size; i++) printf("%c", ((char*)key.mv_data)[i]); printf("\n");
+    // int i; for(i=0; i<key.mv_size; i++) printf("%02x", ((char*)key.mv_data)[i]); printf(" -> ");
+    // for(i=0; i<key.mv_size; i++) printf("%c", ((char*)key.mv_data)[i]); printf("\n");
 
     // Clear the data object if set.
     cursor->session_idle_in_sec = 0;
@@ -414,16 +421,17 @@ bool sky_cursor_next_object(sky_cursor *cursor)
 // Returns true if the cursor moved forward, otherwise false.
 bool sky_cursor_next_event(sky_cursor *cursor)
 {
-    fprintf(stderr, "\n  next.event.1\n");
-
     // Don't allow cursor to move if we're EOF or marked as EOS wait.
     if(cursor->next_event->eof || (cursor->event->eos && cursor->eos_wait)) {
-        fprintf(stderr, "  next.event.2 - eof or eos wait\n");
         return false;
     }
     cursor->eos_wait = true;
 
-    fprintf(stderr, "  next.event.3 - no eos and no eos wait\n");
+    // Copy variable state from current event to next event.
+    if(cursor->variable_event_sz > 0) {
+        uint32_t variable_event_offset = sizeof(sky_event) + cursor->action_event_sz;
+        memcpy(((void*)cursor->next_event) + variable_event_offset, ((void*)cursor->event) + variable_event_offset, cursor->variable_event_sz - cursor->action_event_sz);
+    }
 
     // Copy the next event to the current event.
     memcpy(cursor->event, cursor->next_event, cursor->event_sz);
@@ -432,8 +440,6 @@ bool sky_cursor_next_event(sky_cursor *cursor)
     MDB_val key, data;
     int rc = mdb_cursor_get(cursor->lmdb_cursor, &key, &data, MDB_NEXT_DUP);
     if(rc != 0) {
-        fprintf(stderr, "  next.event.4 - no more events\n");
-
         // Clear next event if there isn't one.
         memset(cursor->next_event, 0, cursor->event_sz);
         cursor->next_event->eof = true;
@@ -501,14 +507,12 @@ bool sky_lua_cursor_next_event(sky_cursor *cursor)
 
 bool sky_cursor_eof(sky_cursor *cursor)
 {
-    fprintf(stderr, "  eof? %d\n", cursor->next_event->eof);
     return cursor->next_event->eof;
 }
 
 // End-of-session (EOS) is defined by idle time between the current event and the next event.
 bool sky_cursor_eos(sky_cursor *cursor)
 {
-    fprintf(stderr, "  eos? %d\n", cursor->event->eos);
     return cursor->event->eos;
 }
 
@@ -522,7 +526,6 @@ void sky_cursor_update_eos(sky_cursor *cursor)
     } else {
         cursor->event->eos = (cursor->next_event->timestamp - cursor->event->timestamp >= cursor->session_idle_in_sec);
     }
-    fprintf(stderr, "eos=%d; %d | (%d - %d) >= %d\n", cursor->event->eos, cursor->next_event->eof, cursor->next_event->timestamp, cursor->event->timestamp, cursor->session_idle_in_sec);
 }
 
 void sky_cursor_set_session_idle(sky_cursor *cursor, uint32_t seconds)
@@ -538,7 +541,6 @@ void sky_cursor_next_session(sky_cursor *cursor)
 
 bool sky_lua_cursor_next_session(sky_cursor *cursor)
 {
-    fprintf(stderr, "lua.next.session\n");
     sky_cursor_next_session(cursor);
     return !cursor->next_event->eof;
 }
@@ -1115,7 +1117,7 @@ func (e *ExecutionEngine) generateHeader() error {
 }
 
 func variableStructDef(args ...interface{}) string {
-	if variable, ok := args[0].(*Variable); ok && !variable.IsSystemVariable() {
+	if variable, ok := args[0].(*Variable); ok && !variable.IsSystemVariable() && variable.Name != "timestamp" {
 		return fmt.Sprintf("%v _%v;", variable.cType(), variable.Name)
 	}
 	return ""
@@ -1134,7 +1136,7 @@ func metatypeFunctionDef(args ...interface{}) string {
 }
 
 func initDescriptorDef(args ...interface{}) string {
-	if variable, ok := args[0].(*Variable); ok && variable.PropertyId != 0 {
+	if variable, ok := args[0].(*Variable); ok && !variable.IsSystemVariable() {
 		return fmt.Sprintf("cursor:set_property(%d, ffi.offsetof('sky_lua_event_t', '_%s'), ffi.sizeof('%s'), '%s')", variable.PropertyId, variable.Name, variable.cType(), variable.DataType)
 	}
 	return ""

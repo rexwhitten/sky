@@ -163,13 +163,9 @@ func TestServerSessionizedFunnelAnalysisQuery(t *testing.T) {
 		// Run query.
 		query := `
 			FOR EACH SESSION DELIMITED BY 2 HOURS
-			DEBUG("SESSION")
 			  FOR EACH EVENT
-			DEBUG(timestamp)
 			    WHEN action == "A0" THEN
-			DEBUG("A0")
 			      WHEN action == "A1" WITHIN 1..1 STEPS THEN
-			DEBUG("A1")
 			        SELECT count() AS count GROUP BY action
 			      END
 			    END
@@ -177,7 +173,7 @@ func TestServerSessionizedFunnelAnalysisQuery(t *testing.T) {
 			END
 			`
 		q, _ := json.Marshal(query)
-		// _codegen(t, "foo", `{"query":`+string(q)+`}`))
+		// _codegen(t, "foo", `{"query":`+string(q)+`}`)
 		resp, _ := sendTestHttpRequest("POST", "http://localhost:8586/tables/foo/query", "application/json", `{"query":`+string(q)+`}`)
 		assertResponse(t, resp, 200, `{"action":{"A1":{"count":1}}}`+"\n", "POST /tables/:name/query failed.")
 	})
@@ -199,15 +195,13 @@ func TestServerSystemVariables(t *testing.T) {
 
 		query := `
 			FOR EACH SESSION DELIMITED BY 2 HOURS
-			  DEBUG("SESSION")
 			  FOR EACH EVENT
-			    DEBUG("EVENT")
 				SELECT count() AS count GROUP BY action, @@eos, @@eof
 			  END
 			END
 		`
 		q, _ := json.Marshal(query)
-		_codegen(t, "foo", `{"query":`+string(q)+`}`)
+		// _codegen(t, "foo", `{"query":`+string(q)+`}`)
 		resp, _ := sendTestHttpRequest("POST", "http://localhost:8586/tables/foo/query", "application/json", `{"query":`+string(q)+`}`)
 		assertResponse(t, resp, 200, `{"action":{"A0":{"eos":{"false":{"eof":{"false":{"count":1}}},"true":{"eof":{"false":{"count":1},"true":{"count":1}}}}},"A1":{"eos":{"true":{"eof":{"false":{"count":1},"true":{"count":1}}}}}}}`+"\n", "POST /tables/:name/query failed.")
 	})
@@ -273,6 +267,7 @@ func TestServerFSMQuery(t *testing.T) {
 			END
 		`
 		q, _ := json.Marshal(query)
+		// _codegen(t, "foo", `{"query":`+string(q)+`}`)
 		resp, _ := sendTestHttpRequest("POST", "http://localhost:8586/tables/foo/query", "application/json", `{"query":`+string(q)+`}`)
 		assertResponse(t, resp, 200, `{"cancelled":{"count":1},"registered":{"count":1},"visited":{"count":2}}`+"\n", "POST /tables/:name/query failed.")
 	})

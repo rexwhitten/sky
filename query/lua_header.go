@@ -13,8 +13,8 @@ typedef struct sky_string_t {
 typedef struct {
   bool _eos;
   bool _eof;
-  int64_t _ts;
   uint32_t _timestamp;
+  int64_t _ts;
   {{range .}}{{structdef .}}
   {{end}}
 } sky_lua_event_t;
